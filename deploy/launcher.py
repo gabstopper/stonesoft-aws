@@ -1,4 +1,9 @@
 '''
+Created on Nov 21, 2016
+
+@author: davidlepage
+'''
+'''
 Stonesoft NGFW configurator for AWS instance deployment with auto-engine creation.
 There are two example use cases that can be leveraged to generate NGFW automation into AWS:
 
@@ -65,8 +70,8 @@ from smc import session
 from aws import AWSConfig, VpcConfiguration, waiter, spin_up_host
 from ngfw import NGFWConfiguration
 from smc.actions.tasks import TaskMonitor
-from deploy.prompt import prompt_user, menu
-from deploy.ngfw import validate
+from prompt import prompt_user, menu
+from ngfw import validate
 from smc.api.exceptions import CreateEngineFailed
 
 if __name__ == '__main__':

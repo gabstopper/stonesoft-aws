@@ -5,7 +5,7 @@ Created on Nov 18, 2016
 '''
 from os.path import expanduser
 from collections import namedtuple
-from deploy.ngfw import obtain_locations, obtain_fwpolicy, obtain_vpnpolicy
+from ngfw import obtain_locations, obtain_fwpolicy, obtain_vpnpolicy
 
 # Template field
 class Field(namedtuple('Field', 'prompt default required')):

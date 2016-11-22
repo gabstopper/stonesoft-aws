@@ -5,7 +5,6 @@ import logging
 import time
 import ipaddress
 import botocore.exceptions
-from deploy import mem
 
 ec2 = None
 
@@ -48,7 +47,6 @@ class VpcConfiguration(object):
         self.availability_zone = None
 
     def load(self):
-        print "In load: %s" % mem.ec2
         if not self.vpcid:
             default_vpc = ec2.vpcs.filter(Filters=[{
                                         'Name': 'isDefault',
@@ -80,9 +78,6 @@ class VpcConfiguration(object):
         :param instance_tenancy: 'default|dedicated|host'
         :returns: self
         """
-        print "DEFAULT SESSION: %s" % mem.ec2
-        #import sys
-        #sys.exit(1)
         vpc_new = ec2.create_vpc(CidrBlock=vpc_subnet,
                                  InstanceTenancy=instance_tenancy)
         logger.info("Created VPC: {}".format(vpc_new.vpc_id))

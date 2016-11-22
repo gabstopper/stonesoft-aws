@@ -70,7 +70,7 @@ def get_input(fields):
     data = {}
     for field in fields:
         for name, fieldtuple in field.items():
-            print name, fieldtuple
+            #print name, fieldtuple
             result = menu(fieldtuple.prompt, fields=fieldtuple)
             field[name] = result
             data.update(field)

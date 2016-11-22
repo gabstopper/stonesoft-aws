@@ -2,13 +2,17 @@
 
 Python based tool to auto-deploy Stonesoft NGFW into Amazon Web Services.
 
-Features:
+###Features:
 * Create a full VPC and subnets and auto-attach a NGFW
 * Full provisioning of NGFW in Stonesoft Management Center
 * Auto-rollback of VPC and NGFW in case of operational failures during processing
 
-Requirements:
+###Requirements:
 Stonsoft Management Center >= 6.1
+smc-python >=0.3.8
+
+###Installation:
+pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-dependency-links
 
 When launching, you have several switches available:
 
