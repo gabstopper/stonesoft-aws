@@ -1,0 +1,4 @@
+smc-python==0.3.8
+ipaddress
+boto3
+pyyaml
