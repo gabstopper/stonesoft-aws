@@ -13,8 +13,12 @@ Stonsoft Management Center >= 6.1
 When launching, you have several switches available:
 
 -i -> Enter interactive mode, prompting for all settings. If SMC login settings are stored in ~.smcrc, these can be omitted
+
 -y <yaml file> -> File to pull credential and configuration information from
--n -> no log (good for devops deploys where you want to suppress output
+
+-n -> no log (good for devops deploys where you want to suppress output) - will still log ERROR
+
+-d -> delete existing VPC and running instances using menu prompt
 
 As mentioned above, SMC credential information can be stored in either ~.smcrc or the file specified with -y <yaml file>. If the
 credentials are in yaml, they will be used. If omitted from yaml, ~.smcrc will be checked. 
@@ -25,5 +29,23 @@ such as ~/.aws/credentials, etc.
 
 It is recommended to run -i <interactive mode> the first time through which will provide proper formatting for the 
 yaml configuration automatically. Once run the first time, subsequent runs can be done using -y <yaml>.
+
+Launch in interactive mode (writes out yaml file):
+
+```python
+python launcher.py -i
+```
+
+Launch using yaml file without logging:
+
+```python
+python launcher.py -y /path/to/config.yml -n
+```
+
+Launch using yaml and delete an existing VPC, disable logging:
+
+```python
+python launcher.py -d /path/to/config.yml -d -n
+```
 
 
