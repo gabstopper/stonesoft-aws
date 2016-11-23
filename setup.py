@@ -12,6 +12,7 @@ setup(name='stonesoft-aws',
       author_email='dwlepage70@gmail.com',
       license='Apache 2.0',
       packages=['deploy'],
+      scripts=['ngfw-launcher'],
       install_requires=[
           'smc-python>=0.3.8',
           'boto3',

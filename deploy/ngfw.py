@@ -4,7 +4,7 @@ NGFW Settings and required methods
 import logging
 from smc.elements.helpers import location_helper
 from smc.vpn.policy import VPNPolicy
-from smc.elements.other import ContactAddress
+from smc.elements.other import prepare_contact_address
 from smc.core.engines import Layer3Firewall
 from smc.api.exceptions import TaskRunFailed, NodeCommandFailed, LicenseError,\
     LoadEngineFailed, ElementNotFound, LoadPolicyFailed, MissingRequiredInput
@@ -64,7 +64,7 @@ class NGFWConfiguration(object):
                                                                     address, 
                                                                     network_value)
         logger.info('Created NGFW')
-        
+
         self.engine = engine.reload()
         #Enable VPN on external interface if policy provided
         if self.vpn_policy:
@@ -107,7 +107,8 @@ class NGFWConfiguration(object):
         """
         for interface in self.engine.interface.all():
             if interface.name == 'Interface 0':
-                contact_address = ContactAddress(elastic_ip, location='Default')
+                contact_address = prepare_contact_address(elastic_ip, 
+                                                          location='Default')
                 interface.add_contact_address(contact_address,
                                               self.engine.etag)
  
@@ -128,36 +129,6 @@ class NGFWConfiguration(object):
                 logger.error(msg)
                 self.has_errors.append(msg)
             return userdata
-   
-    def monitor_status(self, step=10):
-        """
-        Monitor NGFW initialization. See :py:class:`smc.core.node.NodeStatus` for
-        more information on statuses or attributes to monitor/
-        
-        :param step: sleep interval
-        """
-        logger.info('Waiting for NGFW to fully initialize...')
-        desired_status = 'Online'
-        import time
-        try:
-            while True:
-                for node in self.engine.nodes:
-                    current = node.status()
-                    if current.status != desired_status:
-                        logger.info('Status: {}, Config status: {}, State: {}'
-                                    .format(current.status, 
-                                            current.configuration_status,
-                                            current.state))
-                    else:
-                        logger.info('Initialization complete. Installed policy: {}, '
-                                    'Version: {}, State: {}'
-                                    .format(current.installed_policy,
-                                            current.version,
-                                            current.state))
-                        return           
-                time.sleep(step)
-        except KeyboardInterrupt:
-            pass
 
     def rollback(self):
         """
@@ -182,6 +153,30 @@ class NGFWConfiguration(object):
             logger.error('Failed loading engine, rollback failed: %s', e)
         except ElementNotFound as e:
             logger.error('Failed finding VPN Policy: %s', e)
+
+def monitor_status(engine=None, status='No Policy Installed', 
+                   step=10):
+        """
+        Monitor NGFW initialization. See :py:class:`smc.core.node.NodeStatus` for
+        more information on statuses or attributes to monitor/
+        
+        :param step: sleep interval
+        """
+        desired_status = status
+        import time
+        try:
+            while True:
+                node = engine.nodes[0]
+                current = node.status()
+                if current.status != desired_status:
+                    yield 'NGFW status: {}, waiting..'.format(current.status)
+                else:
+                    break
+                time.sleep(step)
+            yield 'Initialization complete. Version: {}, State: {}'\
+                  .format(current.version, current.state)
+        except KeyboardInterrupt:
+            pass
     
 def obtain_vpnpolicy():
     """
@@ -208,6 +203,10 @@ def obtain_locations():
     return [location.name for location in describe_location()]
 
 def validate(ngfw):
+    """
+    Validate that settings provided are valid objects in SMC before anything
+    is kicked off to AWS
+    """
     if not ngfw.firewall_policy in obtain_fwpolicy():
         raise LoadPolicyFailed('Firewall policy not found, name provided: {}'
                                .format(ngfw.firewall_policy))

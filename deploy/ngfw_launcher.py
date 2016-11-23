@@ -3,6 +3,7 @@ Created on Nov 21, 2016
 
 @author: davidlepage
 '''
+from deploy.ngfw import monitor_status
 '''
 Stonesoft NGFW configurator for AWS instance deployment with auto-engine creation.
 There are two example use cases that can be leveraged to generate NGFW automation into AWS:
@@ -165,7 +166,6 @@ if __name__ == '__main__':
     # Verify AMI is valid
     ec2.meta.client.describe_images(ImageIds=[awscfg.ngfw_ami])
 
-    sys.exit(1)
     '''
     Use Case 1: Create entire VPC and deploy NGFW
     ---------------------------------------------
@@ -204,19 +204,20 @@ if __name__ == '__main__':
         # Create the NGFW
         ngfw(interfaces, gateway)
         userdata = ngfw.initial_contact()
+        ngfw.add_contact_address(vpc.elastic_ip)
         
         instance = vpc.launch(key_pair=awscfg.aws_keypair, 
                               userdata=userdata, 
                               imageid=awscfg.ngfw_ami,
                               instance_type=awscfg.aws_instance_type)
 
-        ngfw.add_contact_address(vpc.elastic_ip)
+        #ngfw.add_contact_address(vpc.elastic_ip)
         ngfw.engine.rename('{} ({})'.format(instance.id, vpc.availability_zone))
-        ngfw.queue_policy()
+        #ngfw.queue_policy()
         
         for message in waiter(instance, 'running'):
             logger.info(message)
-
+        
         if awscfg.aws_client and awscfg.aws_client_ami:
             spin_up_host(awscfg.aws_keypair, vpc, awscfg.aws_instance_type, 
                          awscfg.aws_client_ami)
@@ -226,7 +227,13 @@ if __name__ == '__main__':
 
         logger.info('To connect to your AWS instance, execute the command: '
                     'ssh -i {}.pem aws@{}'.format(instance.key_name, vpc.elastic_ip))
-
+        
+        logger.info('Waiting for NGFW to do initial contact...')
+        for msg in monitor_status(ngfw.engine, status='No Policy Installed'):
+            logger.info(msg)
+         
+        ngfw.queue_policy()
+        
         import time
         start_time = time.time()
         
@@ -237,8 +244,7 @@ if __name__ == '__main__':
         if ngfw.has_errors:
             print 'Errors were returned, manual intervention will be required: {}'\
             .format(ngfw.has_errors)
-        #else:
-        #    ngfw.monitor_status()
+
         print("--- %s seconds ---" % (time.time() - start_time))
                   
     except (botocore.exceptions.ClientError, CreateEngineFailed) as e:
