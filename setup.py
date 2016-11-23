@@ -14,7 +14,7 @@ setup(name='stonesoft-aws',
       packages=find_packages(),
       include_package_data=True,
       install_requires=[
-          'smc-python>=0.3.7',
+          'smc-python>=0.3.9',
           'boto3',
           'ipaddress',
           'pyyaml'
@@ -25,7 +25,7 @@ setup(name='stonesoft-aws',
         ]
       },
       #pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-dependency-links
-      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python-0.3.8'],
+      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python-0.3.9'],
       classifiers=[
         "Programming Language :: Python :: 2.7",
         "Topic :: System :: Networking :: Firewalls",

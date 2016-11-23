@@ -143,10 +143,6 @@ def main():
         logger.info('Attempting to resolve AWS credentials natively')
         ec2 = boto3.resource('ec2')
     
-    import deploy
-    deploy.setup_default_session(aws_access_key_id = awscfg.aws_access_key_id,
-                                 aws_secret_access_key=awscfg.aws_secret_access_key,
-                                 region_name=awscfg.region)
     import aws
     aws.ec2 = ec2 #Have client and credentials
     
@@ -234,7 +230,7 @@ def main():
         import time
         start_time = time.time()
         
-        if ngfw.task:
+        if ngfw.task: #Upload policy task
             for message in TaskMonitor(ngfw.task).watch():
                 logger.info(message)
         
