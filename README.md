@@ -12,12 +12,28 @@ Stonsoft Management Center >= 6.1
 
 smc-python >=0.3.8
 
+python 2.7.x
+
 ####Installation:
+
+```python
+virtualenv venv
+. venv/bin/activate
 pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-dependency-links
+```
+
+**Note: Installing using pip will install required dependencies
+
+After installation, program can be run by either:
+
+```python
+ngfw_launcher .....
+python -m ngfw_launcher ...
+```
 
 When launching, you have several switches available:
 
-+ -i: Enter interactive mode, prompting for all settings. SMC and AWS credentials can be omitted if stored in respective ~.smcrc/.aws/credentials files
++ -i: Enter interactive mode, prompting for all settings. SMC and AWS credentials can be omitted if stored in respective ~.smcrc or .aws/credentials files
 
 + -y <yaml file>: File to pull credential and configuration information from
 
@@ -68,17 +84,18 @@ ___
 |vpn_policy (str)|Assign to VPN policy. Optional.|
 |vpn_role (str)|Role for VPN gateway (central/satellite). Default: Central|
 
+___
 
 Launch in interactive mode (writes out yaml file):
 
 ```python
-python ngfw-launcher.py -i
+ngfw-launcher.py -i
 ```
 
 Launch using yaml file without logging:
 
 ```python
-python ngfw-launcher.py -y /path/to/config.yml -n
+ngfw-launcher.py -y /path/to/config.yml -n
 ```
 
 Launch using yaml and delete an existing VPC, disable logging (this is interactive as delete prompts based on available VPC's using AWS credentials):

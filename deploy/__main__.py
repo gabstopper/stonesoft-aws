@@ -1,10 +1,4 @@
 '''
-Created on Nov 21, 2016
-
-@author: davidlepage
-'''
-from deploy.ngfw import monitor_status
-'''
 Stonesoft NGFW configurator for AWS instance deployment with auto-engine creation.
 There are two example use cases that can be leveraged to generate NGFW automation into AWS:
 
@@ -73,10 +67,11 @@ from ngfw import NGFWConfiguration
 from smc.actions.tasks import TaskMonitor
 from prompt import prompt_user, menu
 from ngfw import validate
+from deploy.ngfw import monitor_status
 from smc.api.exceptions import CreateEngineFailed
 
-if __name__ == '__main__':
-    
+def main():
+        
     logger = logging.getLogger()
     handler = logging.StreamHandler()
     logger.addHandler(handler)
@@ -99,7 +94,7 @@ if __name__ == '__main__':
     else:
         logger.setLevel(logging.INFO)
     
-    smc_url = smc_key = None    
+    smc_url = smc_api_key = None    
     
     if args.interactive:
         path = prompt_user()   # Run through user prompts, save, then safe_read
@@ -288,3 +283,6 @@ if __name__ == '__main__':
         print message
     '''
     session.logout()
+
+if __name__ == '__main__':
+    main()
