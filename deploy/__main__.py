@@ -86,7 +86,9 @@ def main():
     args = parser.parse_args()
     
     if not any(vars(args).values()):
-        parser.error('No arguments provided.')
+        #parser.error('No arguments provided.')
+        parser.print_help()
+        parser.exit()
     elif args.delete and not (args.interactive or args.yaml):
         parser.error('-d|--delete requires -i or -y specified')
 
@@ -124,7 +126,6 @@ def main():
     if args.yaml:
         validate(ngfw)
 
-    sys.exit(1)
     """
     Strategy to obtain credentials for EC2 operations (in order):
     * Check for AWS credentials in YAML configuration
