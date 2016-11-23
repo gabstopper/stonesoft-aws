@@ -171,10 +171,10 @@ def monitor_status(engine=None, status='No Policy Installed',
                 if current.status != desired_status:
                     yield 'NGFW status: {}, waiting..'.format(current.status)
                 else:
+                    yield 'Initialization complete. Version: {}, State: {}'\
+                            .format(current.version, current.state)
                     break
                 time.sleep(step)
-            yield 'Initialization complete. Version: {}, State: {}'\
-                  .format(current.version, current.state)
         except KeyboardInterrupt:
             pass
     

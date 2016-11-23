@@ -211,13 +211,14 @@ if __name__ == '__main__':
                               imageid=awscfg.ngfw_ami,
                               instance_type=awscfg.aws_instance_type)
 
-        #ngfw.add_contact_address(vpc.elastic_ip)
+        # Rename to AMI instance id (availability zone)
         ngfw.engine.rename('{} ({})'.format(instance.id, vpc.availability_zone))
-        #ngfw.queue_policy()
         
+        # Wait for AWS instance to show running state
         for message in waiter(instance, 'running'):
             logger.info(message)
         
+        # If user wants a client AMI, launch in the background
         if awscfg.aws_client and awscfg.aws_client_ami:
             spin_up_host(awscfg.aws_keypair, vpc, awscfg.aws_instance_type, 
                          awscfg.aws_client_ami)
@@ -231,7 +232,8 @@ if __name__ == '__main__':
         logger.info('Waiting for NGFW to do initial contact...')
         for msg in monitor_status(ngfw.engine, status='No Policy Installed'):
             logger.info(msg)
-         
+        
+        # After initial contact has been made, fire off policy upload 
         ngfw.queue_policy()
         
         import time
