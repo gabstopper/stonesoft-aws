@@ -37,7 +37,7 @@ When launching, you have several switches available:
 
 + -y <yaml file>: File to pull credential and configuration information from
 
-+ -n: no log (good for devops deploys where you want to suppress output) - will still log ERROR
++ -l: no log (good for devops deploys where you want to suppress output) - will still log ERROR
 
 + -d: delete existing VPC and running instances using menu prompt
 
@@ -95,13 +95,13 @@ ngfw_launcher.py -i
 Launch using yaml file without logging:
 
 ```python
-ngfw_launcher.py -y /path/to/config.yml -n
+ngfw_launcher.py -y /path/to/config.yml -l
 ```
 
 Launch using yaml and delete an existing VPC, disable logging (this is interactive as delete prompts based on available VPC's using AWS credentials):
 
 ```python
-ngfw_launcher.py -d /path/to/config.yml -d -n
+ngfw_launcher.py -d /path/to/config.yml -d -l
 ```
 
 

@@ -1,0 +1,24 @@
+AWS:
+  aws_access_key_id: xxxxxxxxxxxxxxxx
+  aws_client: false
+  aws_instance_type: t2.micro
+  aws_keypair: mykeypair
+  aws_region: ''
+  aws_secret_access_key: xxxxxxxxxxxxxxxxxxxxxxxxxx
+  ngfw_ami: ami-xxxxxxxxxx
+  vpc_private: 192.168.17.240/28
+  vpc_public: 192.168.17.0/25
+  vpc_subnet: 192.168.17.0/24
+NGFW:
+  antivirus: false
+  default_nat: true
+  dns:
+  - 8.8.8.8
+  firewall_policy: Layer 3 Virtual FW Policy
+  gti: false
+  location: Internet
+  name: awsfirewall
+SMC:
+  smc_address: 172.18.1.150
+  smc_apikey: xxxxxxxxxxxxxxxxxxxxxxxxx
+  smc_port: '8082'

@@ -1,6 +1,7 @@
 """
 Module handling user keyboard input
 """
+import sys
 import yaml
 from smc.api.exceptions import SMCConnectionError
 
@@ -150,3 +151,5 @@ def prompt_user(path=None):
     except SMCConnectionError:
         print "Failed logging in to SMC. Verify credentials and service is running"
         raise
+    except KeyboardInterrupt:
+        sys.exit(1)

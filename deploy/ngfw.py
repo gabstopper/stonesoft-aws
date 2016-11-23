@@ -4,13 +4,13 @@ NGFW Settings and required methods
 import logging
 from smc.elements.helpers import location_helper
 from smc.vpn.policy import VPNPolicy
-from smc.elements.other import ContactAddress
 from smc.core.engines import Layer3Firewall
 from smc.api.exceptions import TaskRunFailed, NodeCommandFailed, LicenseError,\
     LoadEngineFailed, ElementNotFound, LoadPolicyFailed, MissingRequiredInput
 from smc.core.engine import Engine
 from smc.elements.collection import describe_vpn, describe_fw_policy,\
     describe_location
+from smc.elements.other import prepare_contact_address
 
 logger = logging.getLogger(__name__)
 
@@ -107,14 +107,11 @@ class NGFWConfiguration(object):
         """
         for interface in self.engine.interface.all():
             if interface.name == 'Interface 0':
-                contact_address = ContactAddress(elastic_ip, location='Default')
+                contact_address = prepare_contact_address(elastic_ip, 
+                                                          location='Default')
                 interface.add_contact_address(contact_address,
                                               self.engine.etag)
-                #contact_address = prepare_contact_address(elastic_ip, 
-                #                                          location='Default')
-                #interface.add_contact_address(contact_address,
-                #                              self.engine.etag)
- 
+
     def initial_contact(self):
         """
         Bind license and return initial contact information

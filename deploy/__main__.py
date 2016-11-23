@@ -85,10 +85,11 @@ def main():
     parser.add_argument('-l', '--nolog', action='store_true', help='disable logging to console')
     args = parser.parse_args()
     
-    if len(sys.argv[1:]) == 0:
-        parser.print_help()
-        parser.exit()
-        
+    if not any(vars(args).values()):
+        parser.error('No arguments provided.')
+    elif args.delete and not (args.interactive or args.yaml):
+        parser.error('-d|--delete requires -i or -y specified')
+
     if args.nolog:
         logger.setLevel(logging.ERROR)
     else:
@@ -123,6 +124,7 @@ def main():
     if args.yaml:
         validate(ngfw)
 
+    sys.exit(1)
     """
     Strategy to obtain credentials for EC2 operations (in order):
     * Check for AWS credentials in YAML configuration
