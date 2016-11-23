@@ -28,7 +28,7 @@ After installation, program can be run by either:
 
 ```python
 ngfw_launcher .....
-python -m ngfw_launcher ...
+python -m deploy ...
 ```
 
 When launching, you have several switches available:
@@ -89,19 +89,19 @@ ___
 Launch in interactive mode (writes out yaml file):
 
 ```python
-ngfw-launcher.py -i
+ngfw_launcher.py -i
 ```
 
 Launch using yaml file without logging:
 
 ```python
-ngfw-launcher.py -y /path/to/config.yml -n
+ngfw_launcher.py -y /path/to/config.yml -n
 ```
 
 Launch using yaml and delete an existing VPC, disable logging (this is interactive as delete prompts based on available VPC's using AWS credentials):
 
 ```python
-python ngfw-launcher.py -d /path/to/config.yml -d -n
+ngfw_launcher.py -d /path/to/config.yml -d -n
 ```
 
 

@@ -14,7 +14,7 @@ setup(name='stonesoft-aws',
       packages=find_packages(),
       include_package_data=True,
       install_requires=[
-          'smc-python>=0.3.8',
+          'smc-python>=0.3.7',
           'boto3',
           'ipaddress',
           'pyyaml'
