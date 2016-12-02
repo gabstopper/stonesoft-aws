@@ -28,7 +28,7 @@ class NGFWConfiguration(object):
         self.default_nat = default_nat
         self.antivirus = antivirus
         self.gti = gti
-        self.location_ref = location
+        self.location = location
         self.vpn_role = vpn_role
         self.vpn_policy = vpn_policy
         self.firewall_policy = firewall_policy
@@ -57,7 +57,7 @@ class NGFWConfiguration(object):
                                                default_nat=self.default_nat,
                                                enable_antivirus=self.antivirus,
                                                enable_gti=self.gti,
-                                               location_ref=location_helper(self.location_ref))
+                                               location_ref=location_helper(self.location))
                 engine.add_route(default_gateway, '0.0.0.0/0')
             else:
                 engine.physical_interface.add_single_node_interface(interface_id, 
@@ -214,6 +214,9 @@ def validate(ngfw):
         if not ngfw.vpn_policy in obtain_vpnpolicy():
             raise LoadPolicyFailed('VPN policy not found, name provided: {}'
                                    .format(ngfw.vpn_policy))
+    if ngfw.location not in obtain_locations():
+        raise MissingRequiredInput('Location element is not found: {}'
+                                   .format(ngfw.location))
     # Make sure DNS is provided or SMC will reject AV/GTI
     if (ngfw.antivirus or ngfw.gti) and not ngfw.dns:
         raise MissingRequiredInput('Anti-Virus and GTI required DNS servers '

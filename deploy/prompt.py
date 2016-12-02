@@ -1,9 +1,18 @@
 """
 Module handling user keyboard input
 """
+from __future__ import unicode_literals
 import sys
 import yaml
 from smc.api.exceptions import SMCConnectionError
+from smc.api.configloader import transform_login
+from deploy.common import field, NGFW, OPT_VPN, SMC, AWS, OPT_AWS, \
+PATH, OPT_SMC_SSL, OPT_SMC_CERT
+
+try:
+    input = raw_input  # @UndefinedVariable @ReservedAssignment
+except NameError:
+    pass
 
 def menu(prompt, fields=None, choices=None):
     """
@@ -17,48 +26,56 @@ def menu(prompt, fields=None, choices=None):
     """
     while True:
         if not choices: #expecting Field namedtuple
-            assert fields is not None, "Missing field definitions"
+            assert fields is not None, 'Missing field definitions'
             default = '' if not fields.default else fields.default
             if callable(default):   #list returned from SMC API call
                 options = default()
+                print(prompt)
                 for entry in options:
-                    print(1 + options.index(entry)),
-                    print(") " + entry)
+                    numbering = 1 + options.index(entry)
+                    print(str(numbering) + ") " + entry)
                 try:
-                    user_input = raw_input()
+                    user_input = input()
                     if not user_input:
-                        print "Field required, try again"
+                        print('Field required, try again')
                         pass
                     else:
                         return options[int(user_input)-1]
                 except IndexError:
-                    print "Invalid choice, try again"
+                    print('Invalid choice, try again')
                 except ValueError:
-                    print "Invalid entry, try again"
+                    print('Invalid entry, try again')
             else:
-                value = raw_input('{} [{}]: '.format(prompt, default))
-                if not str(value):
+                if sys.version_info > (3,):
+                    value = input('{} [{}]: '.format(prompt, default))
+                else:
+                    value = input('{} [{}]: '.format(prompt, default))\
+                        .decode(sys.stdin.encoding)
+                if not value:
                     # No value given (user pressed enter)
                     if fields.default:
                         return fields.default
                     elif fields.required:
-                        print "Field required, try again"
-                        pass    #Need this field
-                    else:   #Not required ane empty is ok
-                        return ''
+                        print('Field required, try again')
+                        pass
+                    else:   # Not required; empty is ok
+                        return None
                 else:
                     return value
         # Choices provided        
         else:
-            print prompt
+            print(prompt)
             for entry in choices:
-                print(1 + choices.index(entry)),
-                print(") " + entry)
-            
+                numbering = 1 + choices.index(entry)
+                print(str(numbering) + ") " + entry)
             try:
-                return choices[input()-1]
+                choice = input()
+                try:
+                    return choices[int(choice)-1]
+                except ValueError:
+                    print('Invalid input. Try again.')
             except IndexError:
-                print "Invalid choice. Try again."
+                print('Invalid choice. Try again.')
 
 def get_input(fields):
     """
@@ -86,7 +103,7 @@ def write_cfg_to_yml(data, path=None):
     # Convert string True|False to boolean
     for _, fields in data.items():
         for key, value in fields.items():
-            if isinstance(value, str):
+            if value and not isinstance(value, list):
                 if value.lower() == 'false':
                     fields[key] = False
                 elif value.lower() == 'true':
@@ -94,7 +111,7 @@ def write_cfg_to_yml(data, path=None):
     # Write to file
     with open(path, 'w') as yaml_file:
         yaml.safe_dump(data, yaml_file, default_flow_style=False)
-    print "Wrote ngfw-deploy.yml to dir %s" % path
+    print('Wrote ngfw-deploy.yml to dir %s' % path)
 
 def prompt_user(path=None):
     """
@@ -105,41 +122,68 @@ def prompt_user(path=None):
     :param str path: path to save yml
     :return: dict of prompt items
     """
-    from common import NGFW, OPT_VPN, SMC, AWS, OPT_AWS, PATH
     from smc import session
-    yml = {}    #For writing to yaml file
+    yml = {}    # For writing to yaml file
     try:
         # SMC settings
-        data = get_input(SMC)
-        if data.get('smc_address') and data.get('smc_apikey'):
-            href = 'http://{}:{}'.format(data.get('smc_address'), data.get('smc_port'))
-            session.login(url=href, api_key=data.get('smc_apikey'))
-            yml.update({'SMC': data})
+        smc = get_input(SMC)
+        if smc.get('smc_address') and smc.get('smc_apikey'):
+            # User specifying SMC information, need SSL?
+            if smc.get('smc_ssl').lower().startswith('true'):
+                smc.update(smc_ssl=True)
+                
+                # Should we verify SSL
+                verify_ssl = get_input(OPT_SMC_SSL)
+                if verify_ssl.get('verify_ssl').lower().startswith('true'):
+                    smc.update(verify_ssl=True)
+                    # If verify SSL selected, need cert path to verify
+                    cert_file = get_input(OPT_SMC_CERT)
+                    smc.update(ssl_cert_file=cert_file.get('ssl_cert_file'))
+                else:
+                    smc.update(verify_ssl=False)
+            else:
+                smc.update(smc_ssl=False)
+           
+            login = transform_login(smc)
+            session.login(**login)
+            yml.update({'SMC': smc})
         else:
-            print "Checking for ~.smcrc file as SMC credential info was not given"
+            print('Checking for ~.smcrc file as SMC credential info was not given')
             session.login()
-        print "Successfully logged in to SMC API"
+        print('Successfully logged in to SMC API')
 
-        #Get NGFW settings
-        data = get_input(NGFW)
-        if data.get('vpn'):
-            value = data.pop('vpn')
+        print("##### NGFW Configuration #####")
+        # Get NGFW settings
+        ngfw = get_input(NGFW)
+        if ngfw.get('vpn'):
+            value = ngfw.pop('vpn')
             if value.lower().startswith('true'):
                 vpninfo = get_input(OPT_VPN)
-                data.update(vpninfo)
-        if data.get('dns'):
-            dns = data.get('dns').split(',')
-            data.update(dns=dns)
-        yml.update({'NGFW': data})
+                ngfw.update(vpninfo)
+        dns=None
+        if ngfw.get('dns'):
+            dns = ngfw.get('dns').split(',')
+            ngfw.update(dns=dns)
+       
+        # If AV or GTI are enabled, but DNS is not provided, prompt
+        if (ngfw.get('gti').lower().startswith('true') or \
+            ngfw.get('antivirus').lower().startswith('true')) and not dns:
+            print('DNS is required when AV or GTI is enabled')
+            dns = get_input([{'dns': field('Enter DNS servers, comma separated',
+                                           required=True)}])
+            ngfw.update(dns=dns.get('dns').split(','))
         
+        yml.update({'NGFW': ngfw})
+        
+        print("##### AWS Configuration #####")
         data = get_input(AWS)
         if data.get('aws_client').lower().startswith('true'):
             client_ami = get_input(OPT_AWS)
             data.update(client_ami)
         if not data.get('aws_access_key_id') and \
                 not data.get('aws_secret_access_key'):
-            data.pop('aws_secret_access_key')
-            data.pop('aws_access_key_id')
+            data.pop('aws_secret_access_key', None)
+            data.pop('aws_access_key_id', None)
         yml.update({'AWS': data})
         
         # Prompt for location to write file, default to home dir
@@ -149,7 +193,8 @@ def prompt_user(path=None):
         return path
         
     except SMCConnectionError:
-        print "Failed logging in to SMC. Verify credentials and service is running"
+        print('Failed logging in to SMC. Verify the credentials used are '\
+            'correct.')
         raise
     except KeyboardInterrupt:
         sys.exit(1)

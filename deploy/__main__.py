@@ -56,18 +56,17 @@ Install boto3 and pyyaml via pip::
     pip install pyyaml
     pip install ipaddress
 '''
-import sys
+#from __future__ import absolute_import
 import yaml
 import logging
 import boto3
 import botocore
 from smc import session
-from aws import AWSConfig, VpcConfiguration, waiter, spin_up_host
-from ngfw import NGFWConfiguration
+from deploy.aws import AWSConfig, VpcConfiguration, waiter, spin_up_host
+from deploy.ngfw import NGFWConfiguration, validate, monitor_status
 from smc.actions.tasks import TaskMonitor
-from prompt import prompt_user, menu
-from ngfw import validate
-from deploy.ngfw import monitor_status
+from deploy.prompt import prompt_user, menu
+from smc.api.configloader import transform_login
 from smc.api.exceptions import CreateEngineFailed
 
 def main():
@@ -86,7 +85,6 @@ def main():
     args = parser.parse_args()
     
     if not any(vars(args).values()):
-        #parser.error('No arguments provided.')
         parser.print_help()
         parser.exit()
     elif args.delete and not (args.interactive or args.yaml):
@@ -95,9 +93,7 @@ def main():
     if args.nolog:
         logger.setLevel(logging.ERROR)
     else:
-        logger.setLevel(logging.INFO)
-    
-    smc_url = smc_api_key = None    
+        logger.setLevel(logging.INFO)  
     
     if args.interactive:
         path = prompt_user()   # Run through user prompts, save, then safe_read
@@ -109,16 +105,13 @@ def main():
             awscfg = AWSConfig(**data.get('AWS'))
             ngfw = NGFWConfiguration(**data.get('NGFW'))
             smc = data.get('SMC')
-            if smc:
-                smc_url = smc.get('url')
-                smc_api_key = smc.get('key')
         except yaml.YAMLError as exc:
             print(exc)  
     
     # Verify SMC
-    if smc_url and smc_api_key:
-        session.login(url=smc_url, api_key=smc_api_key)
-    else: #from ~.smcrc
+    if smc:
+        session.login(**transform_login(smc))
+    else:
         session.login()
     
     # If NGFW settings were provided in the YAML, verify the critical 
@@ -146,7 +139,7 @@ def main():
         logger.info('Attempting to resolve AWS credentials natively')
         ec2 = boto3.resource('ec2')
     
-    import aws
+    from deploy import aws
     aws.ec2 = ec2 #Have client and credentials
     
     if args.delete:
@@ -223,6 +216,8 @@ def main():
         logger.info('To connect to your AWS instance, execute the command: '
                     'ssh -i {}.pem aws@{}'.format(instance.key_name, vpc.elastic_ip))
         
+        import time
+        start_time = time.time()
         logger.info('Waiting for NGFW to do initial contact...')
         for msg in monitor_status(ngfw.engine, status='No Policy Installed'):
             logger.info(msg)
@@ -230,18 +225,15 @@ def main():
         # After initial contact has been made, fire off policy upload 
         ngfw.queue_policy()
         
-        import time
-        start_time = time.time()
-        
         if ngfw.task: #Upload policy task
             for message in TaskMonitor(ngfw.task).watch():
                 logger.info(message)
         
         if ngfw.has_errors:
-            print 'Errors were returned, manual intervention will be required: {}'\
-            .format(ngfw.has_errors)
+            logger.error('Errors were returned, manual intervention will be required: '
+                         '{}'.format(ngfw.has_errors))
 
-        print("--- %s seconds ---" % (time.time() - start_time))
+        logger.info("--- %s seconds ---" % (time.time() - start_time))
                   
     except (botocore.exceptions.ClientError, CreateEngineFailed) as e:
         logger.error('Caught exception, rolling back: {}'.format(e))

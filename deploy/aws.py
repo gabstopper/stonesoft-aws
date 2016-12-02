@@ -247,7 +247,7 @@ class VpcConfiguration(object):
         """
         interfaces = []
         for intf in self.network_interface:
-            for idx, obj in intf.iteritems():
+            for idx, obj in intf.items():
                 interfaces.append({'interface_id': idx,
                                     'address': obj.private_ip_address,
                                     'network_value': obj.subnet.cidr_block})
@@ -274,7 +274,7 @@ class VpcConfiguration(object):
           
         interfaces = []
         for interface in self.network_interface:
-            for idx, network in interface.iteritems():
+            for idx, network in interface.items():
                 interfaces.append({'NetworkInterfaceId': network.network_interface_id,
                                    'DeviceIndex': idx})
 
@@ -399,7 +399,7 @@ class AWSConfig(object):
         self.region = aws_region
         self.aws_instance_type = aws_instance_type
         
-        for k, v in kwargs.iteritems():
+        for k, v in kwargs.items():
             setattr(self, '_'+k, v)
         
     @property

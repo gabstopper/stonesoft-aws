@@ -21,4 +21,4 @@ NGFW:
 SMC:
   smc_address: 172.18.1.150
   smc_apikey: xxxxxxxxxxxxxxxxxxxxxxxxx
-  smc_port: '8082'
+  smc_port: 8082

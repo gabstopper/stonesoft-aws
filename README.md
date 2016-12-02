@@ -3,16 +3,16 @@
 Python based tool to auto-deploy Stonesoft NGFW into Amazon Web Services.
 
 ####Features:
-* Create a full VPC and subnets and auto-attach a Stonesoft NGFW
+* Create a full VPC and define subnets, then auto-attach a Stonesoft NGFW
 * Full provisioning of NGFW in Stonesoft Management Center
 * Auto-rollback of VPC and NGFW in case of operational failures during processing
 
 ####Requirements:
 Stonsoft Management Center >= 6.1
 
-smc-python >=0.3.8
+smc-python >=0.4.0
 
-python 2.7.x
+python 2.7.x, 3.4, 3.5
 
 ####Installation:
 
@@ -22,13 +22,13 @@ virtualenv venv
 pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-dependency-links
 ```
 
-**Note: Installing using pip will install required dependencies
+####Quick Start:
 
-After installation, program can be run by either:
+
+After installation, program can be run by:
 
 ```python
-ngfw_launcher .....
-python -m deploy ...
+ngfw_launcher -h ..... 
 ```
 
 When launching, you have several switches available:
@@ -41,17 +41,15 @@ When launching, you have several switches available:
 
 + -d: delete existing VPC and running instances using menu prompt
 
-As mentioned above, SMC credential information can be stored in either ~.smcrc or the file specified with -y <yaml file>. If the
-credentials are in yaml, they will be used. If omitted from yaml, ~.smcrc will be checked. 
-
-AWS credentials can be stored in a similar fashion. If stored in a yaml file, the access_key and id will be retrieved when 
--y <yaml file> is specified. If they are omitted from the yaml file, credentials are obtained through normal boto3 methods
-such as ~/.aws/credentials, etc.
-
 It is recommended to run -i <interactive mode> the first time through which will provide proper formatting for the 
 yaml configuration automatically. Once run the first time, subsequent runs can be done using -y <yaml>.
-___
 
+####Configuration Options
+
+Configuration can be provided in a yaml file to enable hands off automation for deployment. There are three main configuraton sections with several fields being optional.
+
+These are documented below:
+___
 
 #####AWS Configuration Options:
 
@@ -83,6 +81,27 @@ ___
 |name (str)|Temporary name to assign NGFW. By default, firewalls are renamed to instance ID|
 |vpn_policy (str)|Assign to VPN policy. Optional.|
 |vpn_role (str)|Role for VPN gateway (central/satellite). Default: Central|
+
+##### Stonesoft Management Center (SMC) Configuration Options:
+
+| Option | Description |
+| :------| :-----------|
+|smc_address (str)|IP Address of Stonsoft Management Center. Optional.|
+|smc_apikey (str)| API Client key used for authentication. Optional.|
+|smc_port (str)| Port for SMC API. Default 8082|
+|api_version (str) | Specific version of API. Default: latest|
+|smc_ssl (True/False)| Whether to use SSL to SMC API. Optional.|
+|verify_ssl (True/False)| If using SSL, whether to verify client cert. Optional.|
+|ssl_cert_file (str)| Full path to cert file if validating SSL client cert. Optional.|
+|timeout (int) | Timeout between client and SMC API. Optional. Default: 10s|
+
+Credential information for AWS and Stonesoft SMC is optional within the yaml file if provided in each respective preference files.
+
+SMC credential information can be stored in either ~.smcrc or the file specified with -y <yaml file>. If the
+credentials are in yaml, they will be used. If omitted from yaml, ~.smcrc will be checked. 
+
+AWS credentials can be stored in a similar fashion. If stored in the yaml configuration, the access_key and id will be retrieved when 
+-y <yaml file> is specified. If they are omitted, credentials are obtained through normal boto3 methods such as ~/.aws/credentials, etc.
 
 ___
 
