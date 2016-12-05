@@ -2,6 +2,8 @@
 NGFW Settings and required methods
 '''
 import logging
+from smc import session
+from smc.api.configloader import transform_login
 from smc.elements.helpers import location_helper
 from smc.vpn.policy import VPNPolicy
 from smc.core.engines import Layer3Firewall
@@ -208,16 +210,31 @@ def validate(ngfw):
     is kicked off to AWS
     """
     if not ngfw.firewall_policy in obtain_fwpolicy():
-        raise LoadPolicyFailed('Firewall policy not found, name provided: {}'
-                               .format(ngfw.firewall_policy))
+        raise LoadPolicyFailed('Firewall policy not found, name provided: {}. Available policies: {}'
+                               .format(ngfw.firewall_policy, obtain_fwpolicy()))
     if ngfw.vpn_policy:
         if not ngfw.vpn_policy in obtain_vpnpolicy():
-            raise LoadPolicyFailed('VPN policy not found, name provided: {}'
-                                   .format(ngfw.vpn_policy))
+            raise LoadPolicyFailed('VPN policy not found, name provided: {}. Available policies: {}'
+                                   .format(ngfw.vpn_policy, obtain_fwpolicy()))
     if ngfw.location not in obtain_locations():
-        raise MissingRequiredInput('Location element is not found: {}'
-                                   .format(ngfw.location))
+        raise MissingRequiredInput('Location element is not found: {}. Available locations: {}'
+                                   .format(ngfw.location, obtain_locations()))
     # Make sure DNS is provided or SMC will reject AV/GTI
     if (ngfw.antivirus or ngfw.gti) and not ngfw.dns:
         raise MissingRequiredInput('Anti-Virus and GTI required DNS servers '
                                    'be specified')
+
+def get_smc_session(smc):
+    """
+    Get SMC session and validate settings exist
+    
+    :raises: smc.api.exceptions.SMCConnectionError on failure
+    """
+    if smc:
+        if smc.get('smc_address') and smc.get('smc_apikey'):
+            session.login(**transform_login(smc))
+        else:
+            session.login()
+    else:
+        session.login()
+    logger.info("Obtained SMC connection: %s" % session.connection)

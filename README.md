@@ -10,7 +10,7 @@ Python based tool to auto-deploy Stonesoft NGFW into Amazon Web Services.
 ####Requirements:
 Stonsoft Management Center >= 6.1
 
-smc-python >=0.4.0
+smc-python >=0.4.1
 
 python 2.7.x, 3.4, 3.5
 
@@ -19,7 +19,7 @@ python 2.7.x, 3.4, 3.5
 ```python
 virtualenv venv
 . venv/bin/activate
-pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-dependency-links
+pip install git+https://github.com/gabstopper/stonesoft-aws.git -process-dependency-links
 ```
 
 ####Quick Start:
@@ -53,52 +53,53 @@ ___
 
 #####AWS Configuration Options:
 
-| Option | Description |
-| :------| :-----------|
-| aws_access_key_id (string)| AWS access key. Optional if stored in AWS credential locations |
-| aws_secret_access_key (str)| AWS secret key. Optional if stored in AWS credential locations |
-| aws_instance_type (str)| Instance type to launch in (t2.micro, etc). Required. |
-| aws_keypair (str)| Keypair for connecting to NGFW AWS AMI instance. Required. |
-| aws_region (str)| AWS region to launch instance. Required. If not provided, menu will be displayed|
-| vpc_subnet (str)| VPC subnet to create, i.e. 192.168.3.0/24. Required. |
-| vpc_public (str)| VPC public network, should be within network specified for vpc_subnet, i.e. 192.168.3.0/25. Required.|
-| vpc_private (str)| VPC private network, should be within network specified for vpc_subnet, i.e. 192.168.3.240/28. Required.|
-| ngfw_ami (str) | Stonesoft NGFW AMI id to launch. Required. |
-| aws_client (True/False)| Whether to launch an AWS client host on public subnet. Optional. |
-| aws_client_ami (str)| AWS Client AMI. Required if aws_client is True |
+| Option | Description | Type | Required |
+| :------| :-----------| :--- | :------- |
+| aws_access_key_id | AWS access key. Optional if stored in AWS credential locations | str | False |
+| aws_secret_access_key | AWS secret key. Optional if stored in AWS credential locations | str | False | 
+| aws_instance_type | Instance type to launch in (t2.micro, etc) | str | True | 
+| aws_keypair | Keypair for connecting to NGFW AWS AMI instance | str | True |
+| aws_region | AWS region to launch instance. If not provided, menu will be displayed| str | False |
+| vpc_subnet | VPC subnet to create, i.e. 192.168.3.0/24 | str | True |
+| vpc_public | VPC public network, should be within network specified for vpc_subnet, i.e. 192.168.3.0/25 | str | True | 
+| vpc_private | VPC private network, should be within network specified for vpc_subnet, i.e. 192.168.3.240/28 | str | True |
+| ngfw_ami | Stonesoft NGFW AMI id to launch | str | True |
+| aws_client | Whether to launch an AWS client host on public subnet | boolean | False |
+| aws_client_ami | AWS Client AMI. Required if aws_client is True | str | False |
 
 
 ##### Stonesoft NGFW Configuration Options:
 
-| Option | Description |
-| :------| :-----------|
-|antivirus (True/False)| Enable AntiVirus on NGFW. Optional.|
-|gti (True/False)| Enable GTI on NGFW. Optional.|
-|default_nat (True/False)| Enable default NAT on NGFW. Default True|
-|firewall_policy (str) | Layer 3 Firewall Policy to assign NGFW. Required|
-|location (str)| Location to assign NGFW. Used when SMC is behind NAT. Optional.|
-|dns (list)| DNS to assign NGFW. Required if AV/GTI are True|
-|name (str)|Temporary name to assign NGFW. By default, firewalls are renamed to instance ID|
-|vpn_policy (str)|Assign to VPN policy. Optional.|
-|vpn_role (str)|Role for VPN gateway (central/satellite). Default: Central|
+| Option | Description | Type | Required |
+| :------| :---------- | :--- | :------- |
+|antivirus | Enable AntiVirus on NGFW (default: False) | boolean | False |
+|gti | Enable GTI on NGFW (default: False) | boolean | False |
+|default_nat | Enable default NAT on NGFW (default: True) | boolean | False |
+|firewall_policy | Layer 3 Firewall Policy to assign NGFW | str | True |
+|location | Location to assign NGFW. Used when SMC is behind NAT | str | False |
+|dns | DNS to assign NGFW. Required if AV/GTI are True| list | False |
+|name |Temporary name to assign NGFW. By default, firewalls are renamed to instance ID| str | False |
+|vpn_policy |Assign to VPN policy | str | False |
+|vpn_role |Role for VPN gateway (central/satellite) (default: central) | str | True |
+
 
 ##### Stonesoft Management Center (SMC) Configuration Options:
 
-| Option | Description |
-| :------| :-----------|
-|smc_address (str)|IP Address of Stonsoft Management Center. Optional.|
-|smc_apikey (str)| API Client key used for authentication. Optional.|
-|smc_port (str)| Port for SMC API. Default 8082|
-|api_version (str) | Specific version of API. Default: latest|
-|smc_ssl (True/False)| Whether to use SSL to SMC API. Optional.|
-|verify_ssl (True/False)| If using SSL, whether to verify client cert. Optional.|
-|ssl_cert_file (str)| Full path to cert file if validating SSL client cert. Optional.|
-|timeout (int) | Timeout between client and SMC API. Optional. Default: 10s|
+| Option | Description | Type | Required |
+| :------| :---------- | :--- | :------- |
+|smc_address |IP Address of Stonsoft Management Center | str | False |
+|smc_apikey | API Client key used for authentication | str | False |
+|smc_port | Port for SMC API (default: 8082) | str/int | False |
+|api_version | Specific version of API (default: latest) | str | False |
+|smc_ssl | Whether to use SSL to SMC API (default: False) | boolean | False |
+|verify_ssl | If using SSL, whether to verify client cert (default: False) | boolean | False |
+|ssl_cert_file | Full path to cert file if validating SSL client cert | str | True |
+|timeout | Timeout between client and SMC API (default: 10) | int |False|
 
 Credential information for AWS and Stonesoft SMC is optional within the yaml file if provided in each respective preference files.
 
-SMC credential information can be stored in either ~.smcrc or the file specified with -y <yaml file>. If the
-credentials are in yaml, they will be used. If omitted from yaml, ~.smcrc will be checked. 
+SMC credential information can be stored in either ~/.smcrc or the file specified with -y <yaml file>. If the
+credentials are in yaml, they will be used. If omitted from yaml, ~/.smcrc will be checked. 
 
 AWS credentials can be stored in a similar fashion. If stored in the yaml configuration, the access_key and id will be retrieved when 
 -y <yaml file> is specified. If they are omitted, credentials are obtained through normal boto3 methods such as ~/.aws/credentials, etc.

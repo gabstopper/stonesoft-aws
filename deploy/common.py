@@ -2,56 +2,50 @@
 Menus for interactive prompting
 """
 from __future__ import unicode_literals
-from os.path import expanduser
 from collections import namedtuple
-from ngfw import obtain_locations, obtain_fwpolicy, obtain_vpnpolicy
+from deploy.ngfw import obtain_locations, obtain_fwpolicy, obtain_vpnpolicy
 
-# Template
-Field = namedtuple('Field', 'prompt default required')
+FieldValidator = namedtuple('Validator', 'prompt, field choices')
+def fields(prompt, field, choices=None):
+    return FieldValidator(prompt, field, choices)
 
-def field(prompt, default=None, required=False):
-    return Field(prompt, default, required)
+# NGFW specific information. Choice menu's are pulled directly from SMC API
+FW = [fields('Enter a name', 'name'),
+      fields('Enter DNS server, comma separated', 'dns'),
+      fields('Enter firewall policy: ', 'firewall_policy', choices=obtain_fwpolicy),
+      fields('Enter a location for NGFW: ', 'location', choices=obtain_locations),
+      fields('Use default NAT', 'default_nat'),
+      fields('Enable anti-virus', 'antivirus'),
+      fields('Enable GTI', 'gti'),
+      fields('Assign a VPN Policy', 'vpn')]
 
-# Main NGFW Prompts. Attribute name maps to YML heading
-NGFW = [{'name': field('Enter a name', 'awsfirewall', True)},
-        {'dns': field('Enter DNS servers, comma seperated (required for AV/GTI):')},
-        {'location':field('Enter the location element for NGFW:', default=obtain_locations)},
-        {'firewall_policy': field('Enter firewall policy:', default=obtain_fwpolicy)},
-        {'vpn': field('Assign VPN policy (optional)', default='False')},
-        {'default_nat': field('Use default NAT', default='True')},
-        {'antivirus': field('Enable antivirus', default='False')},
-        {'gti': field('Enable GTI', default='False')}]
+FW_VPN = [fields('Enter VPN policy: ', 'vpn_policy', choices=obtain_vpnpolicy),
+          fields('VPN role (central|satellite)', 'vpn_role')]
 
-# Optional VPN prompts if VPN is specified
-OPT_VPN = [{'vpn_policy': field('Enter VPN policy:', default=obtain_vpnpolicy)},
-           {'vpn_role': field('VPN role (central|satellite)', default='central')}]
+# Stonesoft Management Server information. Optional, if skipped, other menu's will
+# be ignored
+SMC = [fields('IP address of SMC API', 'smc_address')]
 
-# SMC credential info
-SMC = [{'smc_address': field('IP address of SMC API')},
-       {'smc_apikey': field('Enter the api key')},
-       {'smc_port': field('Enter the SMC port', default='8082')},
-       {'smc_ssl': field('Use SSL connection', default='False')}]
+# SMC settings that are required after SMC address is specified
+VERIFY_SMC = [fields('Enter the api key', 'smc_apikey'),
+              fields('Enter the SMC port', 'smc_port'),
+              fields('Use SSL connection', 'smc_ssl')]
 
-# SMC SSL settings, if use SSL connection is specified
-OPT_SMC_SSL = [{'verify_ssl': field('Verify SSL cert', default='False')}]
-OPT_SMC_CERT = [{'ssl_cert_file': field('Full path to SSL cert file', required=True)}]
+VERIFY_SSL = [fields('Verify SSL cert', 'verify_ssl')]
+SMC_CACERT = [fields('Full path to SSL cert file', 'ssl_cert_file')]
 
-# AWS base information
-AWS = [{'aws_access_key_id': field('Enter AWS access key id')},
-       {'aws_secret_access_key': field('Enter AWS secret access key')},
-       {'aws_region': field('Enter AWS region')},
-       {'vpc_subnet': field('Enter VPC subnet (required)', required=True)},
-       {'vpc_public': field('Enter VPC public network (required)', required=True)},
-       {'vpc_private': field('Enter VPC private network (required)', required=True)},
-       {'aws_keypair': field('Enter name of AWS keypair (required)', required=True)},
-       {'ngfw_ami': field('Enter NGFW AMI id (required)', required=True)},
-       {'aws_instance_type': field('Enter NGFW instance type', default='t2.micro')},
-       {'aws_client': field('Start an AMI client instance', default='False')}]
+# Amazon AWS information
+AWS = [fields('Enter AWS access key id', 'aws_access_key_id'),
+       fields('Enter AWS secret access key', 'aws_secret_access_key'),
+       fields('Enter AWS region', 'aws_region'),
+       fields('Enter VPC subnet (required)', 'vpc_subnet'),
+       fields('Enter VPC public network (required)', 'vpc_public'),
+       fields('Enter VPC private network (required)', 'vpc_private'),
+       fields('Enter name of AWS keypair (required)', 'aws_keypair'),
+       fields('Enter NGFW AMI id (required)', 'ngfw_ami'),
+       fields('Enter NGFW instance type', 'aws_instance_type'),
+       fields('Start an AMI client instance', 'aws_client')]
 
-# Optional if client AMI specified
-OPT_AWS = [{'aws_client_ami': field('Enter AWS client AMI', required=True)}]
+AWS_CLIENT = [fields('Enter AWS client AMI', 'aws_client_ami')]
 
-# Path to save the configuration
-PATH = [{'path': field('Location for yaml file', 
-                       default='{}/ngfw-deploy.yml'.format(expanduser("~")))}]
-
+FILE_PATH = [fields('Location for yaml file', 'path')]

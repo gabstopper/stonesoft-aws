@@ -1,5 +1,3 @@
-import boto3
-
 import logging
 try:  # Python 2.7+
     from logging import NullHandler

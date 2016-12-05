@@ -8,8 +8,8 @@ Use Case 1:
 Use Case 2: 
     * Fully provision NGFW into existing VPC
 
-In both cases the NGFW will connect to Stonesoft Management Center over an encrypted connection 
-across the internet.
+In both cases the NGFW in AWS will connect to Stonesoft Management Center over an encrypted 
+connection across the internet.
 It is also possible to host SMC in AWS where contact could be made through AWS routing
 
 .. note:: This also assumes the NGFW AMI is available in "My AMI's" within the AWS Console 
@@ -35,20 +35,16 @@ NGFW to auto-connect to the SMC without intervention.
 
 The SMC should be prepared with the following:
 * Available security engine licenses
-* Pre-configured Layer 3 Policy with needed policy
+* Pre-configured Layer 3 Policy with configured services policy
 
 The tested scenario was based on public AWS documentation found at:
 http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Scenario2.html
 
 Requirements:
-* smc-python
+* smc-python>=0.4.0
 * boto3
 * ipaddress
 * pyyaml
-
-Install smc-python::
-
-    python install git+https://github.com/gabstopper/smc-python.git
 
 Install boto3 and pyyaml via pip::
 
@@ -56,103 +52,37 @@ Install boto3 and pyyaml via pip::
     pip install pyyaml
     pip install ipaddress
 '''
-#from __future__ import absolute_import
 import yaml
 import logging
-import boto3
 import botocore
 from smc import session
-from deploy.aws import AWSConfig, VpcConfiguration, waiter, spin_up_host
-from deploy.ngfw import NGFWConfiguration, validate, monitor_status
+from deploy.aws import AWSConfig, VpcConfiguration, waiter, spin_up_host, get_ec2_client
+from deploy.ngfw import NGFWConfiguration, validate, monitor_status, get_smc_session
 from smc.actions.tasks import TaskMonitor
-from deploy.prompt import prompt_user, menu
-from smc.api.configloader import transform_login
+from deploy.validators import prompt_user, custom_choice_menu
 from smc.api.exceptions import CreateEngineFailed
 
-def main():
-        
-    logger = logging.getLogger()
-    handler = logging.StreamHandler()
-    logger.addHandler(handler)
-    
-    import argparse
-    parser = argparse.ArgumentParser(description='Stonesoft NGFW AWS Launcher')
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('-i', '--interactive', action='store_true', help='Use interactive prompt mode')
-    group.add_argument('-y', '--yaml', help='Specify yaml configuration file name')
-    parser.add_argument('-d', '--delete', action='store_true', help='Delete a VPC using prompt mode')
-    parser.add_argument('-l', '--nolog', action='store_true', help='disable logging to console')
-    args = parser.parse_args()
-    
-    if not any(vars(args).values()):
-        parser.print_help()
-        parser.exit()
-    elif args.delete and not (args.interactive or args.yaml):
-        parser.error('-d|--delete requires -i or -y specified')
+logger = logging.getLogger(__name__)
 
-    if args.nolog:
-        logger.setLevel(logging.ERROR)
-    else:
-        logger.setLevel(logging.INFO)  
-    
-    if args.interactive:
-        path = prompt_user()   # Run through user prompts, save, then safe_read
-    if args.yaml:
-        path = args.yaml
-    with open(path, 'r') as stream:
-        try:
-            data = yaml.safe_load(stream)
-            awscfg = AWSConfig(**data.get('AWS'))
-            ngfw = NGFWConfiguration(**data.get('NGFW'))
-            smc = data.get('SMC')
-        except yaml.YAMLError as exc:
-            print(exc)  
-    
-    # Verify SMC
-    if smc:
-        session.login(**transform_login(smc))
-    else:
-        session.login()
-    
-    # If NGFW settings were provided in the YAML, verify the critical 
-    # settings like VPN policy name and firewall policy name exist.
-    if args.yaml:
-        validate(ngfw)
-
+def deploy(json):
     """
-    Strategy to obtain credentials for EC2 operations (in order):
-    * Check for AWS credentials in YAML configuration
-    * If credentials found in YAML but no region specified, prompt for region
-    * Check for credentials via normal boto3 AWS options, i.e ~/.aws/credentials, etc
-    For more on boto3 credential locations, see:   
-    http://boto3.readthedocs.io/en/latest/guide/quickstart.html#configuration
+    Deploy using dict
+    
+    :raises: InvalidAMIID.NotFound, InvalidKeyPair.NotFound, NoRegionError,
+             smc.api.exceptions.LoadPolicyFailed, MissingRequiredInput
     """
-    if awscfg.aws_access_key_id and awscfg.aws_secret_access_key:
-        if not awscfg.region:
-            aws_session = boto3.session.Session()
-            awscfg.region = menu('Enter a region:', choices=aws_session.get_available_regions('ec2'))
-        ec2 = boto3.resource('ec2',
-                             aws_access_key_id = awscfg.aws_access_key_id,
-                             aws_secret_access_key=awscfg.aws_secret_access_key,
-                             region_name=awscfg.region)
-    else:
-        logger.info('Attempting to resolve AWS credentials natively')
-        ec2 = boto3.resource('ec2')
-    
-    from deploy import aws
-    aws.ec2 = ec2 #Have client and credentials
-    
-    if args.delete:
-        vpcs = [x.id +' '+ x.cidr_block for x in ec2.vpcs.filter()]
-        choice = menu('Enter a VPC to remove: ', choices=vpcs)
-        vpc = VpcConfiguration(choice.split(' ')[0]).load()
-        vpc.rollback()
-    
-    # Before doing anything, verify the AWS key pair exists
-    ec2.meta.client.describe_key_pairs(KeyNames=[awscfg.aws_keypair])
-    # Verify AMI is valid
-    ec2.meta.client.describe_images(ImageIds=[awscfg.ngfw_ami])
+    ngfw = NGFWConfiguration(**json.get('ngfw'))
+    get_smc_session(json.get('smc'))
+    # Validate provided settings like policy names exist
+    validate(ngfw)
+    # Validate AWS credentials and settings
+    awscfg = AWSConfig(**json.get('aws'))
+    get_ec2_client(awscfg)
+    # Run
+    create_vpc_and_ngfw(awscfg, ngfw)
+    session.logout()
 
+def create_vpc_and_ngfw(awscfg, ngfw):
     '''
     Use Case 1: Create entire VPC and deploy NGFW
     ---------------------------------------------
@@ -213,7 +143,7 @@ def main():
         logger.info('Elastic (public) IP address is set to: {}, ngfw instance id: {}'
                     .format(vpc.elastic_ip, instance.id))
 
-        logger.info('To connect to your AWS instance, execute the command: '
+        logger.info('To connect to your NGFW AWS instance, execute the command: '
                     'ssh -i {}.pem aws@{}'.format(instance.key_name, vpc.elastic_ip))
         
         import time
@@ -240,6 +170,7 @@ def main():
         ngfw.rollback()
         vpc.rollback() 
 
+def create_ngfw_in_existing_vpc():
     '''
     Use Case 2: Deploy NGFW into existing VPC
     -----------------------------------------
@@ -273,6 +204,60 @@ def main():
     for message in wait_for_ready(instance):
         print message
     '''
+
+def main():
+        
+    logger = logging.getLogger()
+    handler = logging.StreamHandler()
+    logger.addHandler(handler)
+    
+    import argparse
+    parser = argparse.ArgumentParser(description='Stonesoft NGFW AWS Launcher')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-i', '--interactive', action='store_true', help='Use interactive prompt mode')
+    group.add_argument('-y', '--yaml', help='Specify yaml configuration file name')
+    parser.add_argument('-d', '--delete', action='store_true', help='Delete a VPC using prompt mode')
+    parser.add_argument('-l', '--nolog', action='store_true', help='disable logging to console')
+    args = parser.parse_args()
+    
+    if not any(vars(args).values()):
+        parser.print_help()
+        parser.exit()
+    elif args.delete and not (args.interactive or args.yaml):
+        parser.error('-d|--delete requires -i or -y specified')
+
+    if args.nolog:
+        logger.setLevel(logging.ERROR)
+    else:
+        logger.setLevel(logging.INFO)  
+    
+    if args.interactive:
+        path = prompt_user()   # Run through user prompts, save, then safe_read
+    if args.yaml:
+        path = args.yaml
+    with open(path, 'r') as stream:
+        try:
+            data = yaml.safe_load(stream)
+            awscfg = AWSConfig(**data.get('AWS'))
+            ngfw = NGFWConfiguration(**data.get('NGFW'))
+            smc = data.get('SMC')
+        except yaml.YAMLError as exc:
+            print(exc)  
+    
+    get_smc_session(smc)
+    validate(ngfw) #Raises if validation fails
+            
+    ec2 = get_ec2_client(awscfg, prompt_for_region=True)
+    print("ec2 in main: %s" % ec2)
+    
+    if args.delete:
+        vpcs = [x.id +' '+ x.cidr_block for x in ec2.vpcs.filter()]
+        choice = custom_choice_menu('Enter a VPC to remove: ', vpcs)
+        vpc = VpcConfiguration(choice.split(' ')[0]).load()
+        vpc.rollback()
+
+    create_vpc_and_ngfw(awscfg, ngfw)
+
     session.logout()
 
 if __name__ == '__main__':

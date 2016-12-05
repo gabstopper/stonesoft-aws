@@ -1,10 +1,12 @@
 """
 AWS Related Configuration
 """
-import logging
 import time
 import ipaddress
+import boto3
 import botocore.exceptions
+from deploy.validators import custom_choice_menu
+import logging
 
 ec2 = None
 
@@ -431,3 +433,40 @@ class AWSConfig(object):
      
     def __getattr__(self, value):
         return None
+   
+def get_ec2_client(awscfg, prompt_for_region=False):
+    """
+    Strategy to obtain credentials for EC2 operations (in order):
+    * Check for AWS credentials in YAML configuration
+    * If credentials found in YAML but no region specified, prompt for region
+    * Check for credentials via normal boto3 AWS options, i.e ~/.aws/credentials, etc
+    For more on boto3 credential locations, see:   
+    http://boto3.readthedocs.io/en/latest/guide/quickstart.html#configuration
+    
+    :param AWSConfiguration awscfg: instance of aws configuration
+    :param boolean prompt_for_region: command line call, allow prompt if None
+    :raises: botocore.exceptions.ClientError: various client error during validation
+    :return: ec2 client
+    """
+    global ec2
+    # Raises NoRegionError
+    if awscfg.aws_access_key_id and awscfg.aws_secret_access_key:
+        if prompt_for_region:
+            if not awscfg.region:
+                aws_session = boto3.session.Session()
+                awscfg.region = custom_choice_menu('Enter a region:', aws_session.get_available_regions('ec2'))
+        ec2 = boto3.resource('ec2',
+                             aws_access_key_id = awscfg.aws_access_key_id,
+                             aws_secret_access_key=awscfg.aws_secret_access_key,
+                             region_name=awscfg.region)
+    else:
+        logger.info('Attempting to resolve AWS credentials natively')
+        ec2 = boto3.resource('ec2')
+    logger.info("Obtained ec2 client: %s" % ec2)
+    # Verify the AWS key pair exists, raises InvalidKeyPair.NotFound
+    ec2.meta.client.describe_key_pairs(KeyNames=[awscfg.aws_keypair])
+    # Verify AMI is valid; raises InvalidAMIID.NotFound
+    ec2.meta.client.describe_images(ImageIds=[awscfg.ngfw_ami])
+    
+    print("ec2: %s" % ec2)
+    return ec2
