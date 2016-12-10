@@ -165,7 +165,6 @@ def prompt_user(path=None):
     data = {}
     for opt in SMC:
         smc = prompt(opt)
-        print("SMC IS: %s" % smc)
         if smc.get('smc_address'):
             for opt in VERIFY_SMC:
                 smc.update(prompt(opt))

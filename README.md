@@ -16,33 +16,42 @@ python 2.7.x, 3.4, 3.5
 
 ####Installation:
 
-```python
+```
 virtualenv venv
 . venv/bin/activate
-pip install git+https://github.com/gabstopper/stonesoft-aws.git -process-dependency-links
+pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-dependency-links
 ```
+
 
 ####Quick Start:
 
 
 After installation, program can be run by:
 
-```python
+```
 ngfw_launcher -h ..... 
 ```
 
-When launching, you have several switches available:
+Available options:
+```
+Stonesoft NGFW AWS Launcher
 
-+ -i: Enter interactive mode, prompting for all settings. SMC and AWS credentials can be omitted if stored in respective ~.smcrc or .aws/credentials files
-
-+ -y <yaml file>: File to pull credential and configuration information from
-
-+ -l: no log (good for devops deploys where you want to suppress output) - will still log ERROR
-
-+ -d: delete existing VPC and running instances using menu prompt
+optional arguments:
+  -h, --help            show this help message and exit
+  -i, --interactive     Use interactive prompt mode
+  -y YAML, --yaml YAML  Specify yaml configuration file name
+  -d, --delete          Delete a VPC using prompt mode
+  -r, --remove          Remove ngfw from vpc (menu)
+  -a, --add             Add ngfw to vpc (menu)
+  -n, --nolog           Disable logging to console
+```
 
 It is recommended to run -i <interactive mode> the first time through which will provide proper formatting for the 
 yaml configuration automatically. Once run the first time, subsequent runs can be done using -y <yaml>.
+
+YAML configuration can be used to provide settings when creating an entirely new VPC, otherwise if adding Stonesoft NGFW to 
+an existing VPC, use --add. This will provide a menu of lists walking through the configuration, allowing you to specify
+which availability zones to install into (or ALL) for a given region.
 
 ####Configuration Options
 
@@ -115,13 +124,25 @@ ngfw_launcher.py -i
 Launch using yaml file without logging:
 
 ```python
-ngfw_launcher.py -y /path/to/config.yml -l
+ngfw_launcher.py -y /path/to/config.yml -n
 ```
 
 Launch using yaml and delete an existing VPC, disable logging (this is interactive as delete prompts based on available VPC's using AWS credentials):
 
 ```python
-ngfw_launcher.py -d /path/to/config.yml -d -l
+ngfw_launcher.py -y /path/to/config.yml --delete -n
+```
+
+Launch using yaml and add NGFW to an existing VPC (user input required):
+
+```python
+ngfw_launcher.py -y /path/to/config.yml --add
+```
+
+Launch using yaml and remove NGFW from an existing VPC (user input required):
+
+```python
+ngfw_launcher.py -y /path/to/config.yml --add
 ```
 
 

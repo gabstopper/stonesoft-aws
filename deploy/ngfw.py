@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class NGFWConfiguration(object):
     
-    def __init__(self, name='aws-stonesoft', dns=None, default_nat=True, 
+    def __init__(self, name='awsfirewall', dns=None, default_nat=True, 
                  antivirus=False, gti=False, location=None,
                  firewall_policy=None, vpn_policy=None,
                  vpn_role='central', reverse_connection=False, 
@@ -79,10 +79,9 @@ class NGFWConfiguration(object):
                                                     self.vpn_role)
             if not success:
                 logger.error('VPN policy: {} specified was not successfully bound. '
-                             'This may require manual intervention to push policy from '
-                             'the SMC to enable VPN.'.format(self.vpn_policy))
+                             .format(self.vpn_policy))
 
-    def queue_policy(self):
+    def upload_policy(self):
         """
         Queue Firewall Policy for firewall. Monitor the upload process from 
         the SMC Administration->Tasks menu
@@ -94,9 +93,7 @@ class NGFWConfiguration(object):
                                     '{}'.format(self.firewall_policy)))
         except TaskRunFailed as e:
             msg = 'Firewall policy: {} was not successfully bound. '\
-                  'This will require manual intervention to push '\
-                  'policy from the SMC.Message: {}'\
-                  .format(self.firewall_policy, e)
+                  'Message: {}'.format(self.firewall_policy, e)
             logger.error(msg)
             self.has_errors.append(msg)
         
@@ -125,13 +122,11 @@ class NGFWConfiguration(object):
                 userdata = node.initial_contact(enable_ssh=True)
                 node.bind_license()
             except (LicenseError, NodeCommandFailed) as e:
-                msg = 'Error during initial contact process: {}. '\
-                      'You will have to resolve and manually push '\
-                      'policy to complete installation.'.format(e)
+                msg = 'Error during initial contact process: {}. '.format(e)
                 logger.error(msg)
                 self.has_errors.append(msg)
             return userdata
-
+    
     def rollback(self):
         """
         Rollback the engine, remove from VPN Policy if it's assigned
@@ -147,7 +142,7 @@ class NGFWConfiguration(object):
                 vpn.save()
                 vpn.close()
             result = engine.delete()
-            if result.msg is None:
+            if result.code == 204:
                 logger.info('NGFW deleted successfully')
             else:
                 logger.error('Failed deleting NGFW: %s', result.msg)
