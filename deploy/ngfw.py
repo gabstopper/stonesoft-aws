@@ -1,31 +1,33 @@
 '''
 NGFW Settings and required methods
 '''
-import logging
+import uuid
+import time
+import logging      
 from smc import session
 from smc.api.configloader import transform_login
 from smc.elements.helpers import location_helper
 from smc.vpn.policy import VPNPolicy
 from smc.core.engines import Layer3Firewall
-from smc.api.exceptions import TaskRunFailed, NodeCommandFailed, LicenseError,\
-    LoadEngineFailed, ElementNotFound, LoadPolicyFailed, MissingRequiredInput
+from smc.api.exceptions import TaskRunFailed, LicenseError,\
+    LoadEngineFailed, ElementNotFound, MissingRequiredInput
+from smc.actions.tasks import Task
+from smc.actions.search import element_by_href_as_json  
 from smc.core.engine import Engine
 from smc.elements.collection import describe_vpn, describe_fw_policy,\
-    describe_location
+    describe_location, describe_single_fw
 from smc.elements.other import prepare_contact_address
 
 logger = logging.getLogger(__name__)
 
 class NGFWConfiguration(object):
     
-    def __init__(self, name='awsfirewall', dns=None, default_nat=True, 
+    def __init__(self, dns=None, default_nat=True, 
                  antivirus=False, gti=False, location=None,
                  firewall_policy=None, vpn_policy=None,
                  vpn_role='central', reverse_connection=False, 
                  **kwargs):
-        self.task = None
         self.engine = None
-        self.name = name
         self.dns = dns if dns else []
         self.default_nat = default_nat
         self.antivirus = antivirus
@@ -35,7 +37,9 @@ class NGFWConfiguration(object):
         self.vpn_policy = vpn_policy
         self.firewall_policy = firewall_policy
         self.reverse_connection = reverse_connection
-        self.has_errors = []
+        # Unique temporary name
+        uid = uuid.uuid4()
+        self.name = uid.hex
 
     def __call__(self, interfaces, default_gateway):
         """
@@ -65,7 +69,7 @@ class NGFWConfiguration(object):
                 engine.physical_interface.add_single_node_interface(interface_id, 
                                                                     address, 
                                                                     network_value)
-        logger.info('Created NGFW')
+        logger.info('Created NGFW successfully')
 
         self.engine = engine.reload()
         #Enable VPN on external interface if policy provided
@@ -73,34 +77,34 @@ class NGFWConfiguration(object):
             for intf in engine.internal_gateway.internal_endpoint.all():
                 if intf.name == mgmt_ip:
                     intf.modify_attribute(enabled=True)
-            success = VPNPolicy.add_internal_gateway_to_vpn(
-                                                    engine.internal_gateway.href, 
-                                                    self.vpn_policy, 
-                                                    self.vpn_role)
-            if not success:
-                logger.error('VPN policy: {} specified was not successfully bound. '
-                             .format(self.vpn_policy))
+            VPNPolicy.add_internal_gateway_to_vpn(engine.internal_gateway.href, 
+                                                  self.vpn_policy, 
+                                                  self.vpn_role)
 
+    def __copy__(self):
+        clone = type(self)()
+        clone.__dict__.update(self.__dict__)
+        clone.network_interface = []
+        return clone
+    
     def upload_policy(self):
         """
-        Queue Firewall Policy for firewall. Monitor the upload process from 
+        Upload policy to engine. This is executed after initial contact
+        has succeeded so it's not queued. Monitor the upload process from 
         the SMC Administration->Tasks menu
         
-        :return: None
+        :return: `smc.actions.tasks.Task` follower link
         """
         try:
-            self.task = next(self.engine.upload(
-                                    '{}'.format(self.firewall_policy)))
+            return next(self.engine.upload('{}'.format(self.firewall_policy)))
         except TaskRunFailed as e:
-            msg = 'Firewall policy: {} was not successfully bound. '\
-                  'Message: {}'.format(self.firewall_policy, e)
-            logger.error(msg)
-            self.has_errors.append(msg)
-        
+            logger.error(e)
+
     def add_contact_address(self, elastic_ip):
         """
         Add the elastic IP public address as a contact address to the 
-        management interface (Interface 0)
+        management interface (Interface 0). This allows SMC to contact
+        the NGFW using the elastic address.
         
         :return: None
         """
@@ -113,20 +117,65 @@ class NGFWConfiguration(object):
 
     def initial_contact(self):
         """
-        Bind license and return initial contact information
+        Bind license and return initial contact information. Will be generated
+        with the location set so NGFW knows how to contact the SMC from a public
+        NAT address.
         
         :return: text content for userdata
+        :raises: `smc.api.exceptions.NodeCommandFailed`
         """
-        for node in self.engine.nodes:
-            try:
-                userdata = node.initial_contact(enable_ssh=True)
-                node.bind_license()
-            except (LicenseError, NodeCommandFailed) as e:
-                msg = 'Error during initial contact process: {}. '.format(e)
-                logger.error(msg)
-                self.has_errors.append(msg)
-            return userdata
+        node = self.engine.nodes[0]
+        userdata = node.initial_contact(enable_ssh=True)
+        return userdata
+
+    def bind_license(self):
+        """
+        Bind license. If this fails, still deploy, and policy push will complain
+        that the node is not licensed and require a manual license be attached
+        and policy pushed.
+        
+        :return: None
+        """
+        node = self.engine.nodes[0]
+        try:
+            node.bind_license()
+        except(LicenseError) as e:
+            logger.error(e)
     
+    def get_waiter(self, status='Configured'):
+        """
+        Wait for initial contact
+        """
+        logger.info('Waiting for initial contact from: {}'.format(self.engine.name))
+        start_time = time.time()
+        node = self.engine.nodes[0]
+        while True:
+            state = node.status()
+            logger.debug('Node: {} status {}'.format(node.name, state.configuration_status))
+            if status == state.configuration_status:
+                logger.info("Initial contact: '%s' took: %s seconds" % \
+                            (node.name, time.time() - start_time))
+                yield self
+            yield None
+
+    def policy_waiter(self, follower):
+        logger.info('Uploading policy for {}..'.format(self.engine.name))
+        start_time = time.time()
+        while True:
+            reply = Task(**element_by_href_as_json(follower))
+            if reply.progress:
+                logger.info('[{}]: policy progress -> {}%'.format(self.engine.name, 
+                                                                  reply.progress))
+            if not reply.in_progress:
+                logger.info('Upload policy task completed for {} in {} seconds'
+                            .format(self.engine.name, time.time() - start_time))
+                if not reply.success:
+                    yield [reply.last_message]
+                else:
+                    yield []
+            yield None
+                
+        
     def rollback(self):
         """
         Rollback the engine, remove from VPN Policy if it's assigned
@@ -147,76 +196,83 @@ class NGFWConfiguration(object):
             else:
                 logger.error('Failed deleting NGFW: %s', result.msg)
         except LoadEngineFailed as e:
-            logger.error('Failed loading engine, rollback failed: %s', e)
+            logger.info('Failed loading engine, engine may not exist: %s', e)
         except ElementNotFound as e:
             logger.error('Failed finding VPN Policy: %s', e)
-
-def monitor_status(engine=None, status='No Policy Installed', 
-                   step=10):
-        """
-        Monitor NGFW initialization. See :py:class:`smc.core.node.NodeStatus` for
-        more information on statuses or attributes to monitor/
-        
-        :param step: sleep interval
-        """
-        desired_status = status
-        import time
-        try:
-            while True:
-                node = engine.nodes[0]
-                current = node.status()
-                if current.status != desired_status:
-                    yield 'NGFW status: {}, waiting..'.format(current.status)
-                else:
-                    yield 'Initialization complete. Version: {}, State: {}'\
-                            .format(current.version, current.state)
-                    break
-                time.sleep(step)
-        except KeyboardInterrupt:
-            pass
     
-def obtain_vpnpolicy():
+def del_fw_from_smc(instance_ids):
+    """
+    FW name is 'instance_id (availability zone). To do proper cleanup,
+    remove the FW instance after terminating the EC2 instance.
+    
+    :param list instance_ids: string of instance ids
+    :return: None
+    """
+    firewalls = describe_single_fw() # FW List
+    for instance in instance_ids:
+        for fw in firewalls:
+            if fw.name.startswith(instance):
+                fw.delete()
+                    
+def obtain_vpnpolicy(vpn_policy=None):
     """
     Return available VPN policies
     
     :return: list available VPN Policies
     """
-    return [vpn.name for vpn in describe_vpn()]
+    policy = [vpn.name for vpn in describe_vpn()]
+    if vpn_policy is None:
+        return policy
+    else:
+        if not vpn_policy in policy:
+            raise MissingRequiredInput('VPN policy not found, name provided: '
+                                        '{}. Available policies: {}'
+                                        .format(vpn_policy, policy))
 
-def obtain_fwpolicy():
+def obtain_fwpolicy(firewall_policy=None):
     """
     Return layer 3 firewall policies
     
     :return: list available layer 3 firewall policies
     """
+    policy = [policy.name for policy in describe_fw_policy()]
+    if firewall_policy is None:
+        return policy
+    else:
+        if not firewall_policy in policy:
+            raise MissingRequiredInput('Firewall policy not found, name provided: '
+                                       '{}. Available policies: {}'
+                                       .format(firewall_policy, policy))
+            
     return [policy.name for policy in describe_fw_policy()]
 
-def obtain_locations():
+def obtain_locations(location=None):
     """
     Return available locations in SMC
     
     :return: list list of defined locations
     """
-    return [location.name for location in describe_location()]
+    locations = [loc.name for loc in describe_location()]
+    if location is None:
+        return locations
+    else:
+        if location not in locations:
+            raise MissingRequiredInput('Location element is not found: {}. '
+                                       'Available locations: {}'
+                                       .format(location, locations))
 
-def validate(ngfw):
+def validate(firewall_policy, location, vpn_policy=None, 
+             antivirus=None, gti=None, dns=None, **kwargs):
     """
     Validate that settings provided are valid objects in SMC before anything
     is kicked off to AWS
     """
-    if not ngfw.firewall_policy in obtain_fwpolicy():
-        raise LoadPolicyFailed('Firewall policy not found, name provided: {}. Available policies: {}'
-                               .format(ngfw.firewall_policy, obtain_fwpolicy()))
-    if ngfw.vpn_policy:
-        if not ngfw.vpn_policy in obtain_vpnpolicy():
-            raise LoadPolicyFailed('VPN policy not found, name provided: {}. Available policies: {}'
-                                   .format(ngfw.vpn_policy, obtain_fwpolicy()))
-    if ngfw.location not in obtain_locations():
-        raise MissingRequiredInput('Location element is not found: {}. Available locations: {}'
-                                   .format(ngfw.location, obtain_locations()))
+    obtain_fwpolicy(firewall_policy)
+    obtain_locations(location)
+    obtain_vpnpolicy(vpn_policy)
     # Make sure DNS is provided or SMC will reject AV/GTI
-    if (ngfw.antivirus or ngfw.gti) and not ngfw.dns:
-        raise MissingRequiredInput('Anti-Virus and GTI required DNS servers '
+    if (antivirus or gti) and not dns:
+        raise MissingRequiredInput('Anti-Virus and GTI require that DNS servers '
                                    'be specified')
 
 def get_smc_session(smc):
@@ -232,4 +288,4 @@ def get_smc_session(smc):
             session.login()
     else:
         session.login()
-    logger.info("Obtained SMC connection: %s" % session.connection)
+    logger.debug("Successful connection to SMC")

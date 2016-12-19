@@ -48,18 +48,31 @@ Requirements:
 * ipaddress
 * pyyaml
 '''
-
+from __future__ import print_function
+import threading
+import time
 import yaml
 import logging
 import botocore
 from smc import session
-from deploy.aws import AWSConfig, VpcConfiguration, waiter, spin_up_host, get_ec2_client,\
-    get_available_vpcs, next_available_subnet, create_tag, remove_ngfw_from_vpc
-from deploy.ngfw import NGFWConfiguration, validate, monitor_status, get_smc_session
-from smc.actions.tasks import TaskMonitor
-from deploy.validators import prompt_user, custom_choice_menu
-from smc.api.exceptions import CreateEngineFailed
-
+from deploy.aws import (
+    AWSConfig, VpcConfiguration,
+    spin_up_host, next_available_subnet, 
+    create_tag, remove_ngfw_from_vpc, 
+    select_vpc, installed_as_list_view,
+    list_all_subnets, list_tagged_instances, 
+    select_unused_subnet, select_instance, 
+    select_delete_vpc, get_ec2_client, 
+    authorize_security_group_ingress, create_security_group,
+    rollback_existing_vpc, validate_aws)
+from deploy.ngfw import NGFWConfiguration, validate, get_smc_session
+from deploy.validators import prompt_user
+from smc.api.exceptions import CreateEngineFailed, NodeCommandFailed
+try:
+    from queue import Queue
+except ImportError:
+    from Queue import Queue
+    
 logger = logging.getLogger(__name__)
 
 def create_vpc_and_ngfw(awscfg, ngfw):
@@ -86,31 +99,37 @@ def create_vpc_and_ngfw(awscfg, ngfw):
     * NGFW receives queued policy and becomes active
     '''
     vpc = VpcConfiguration.create(vpc_subnet=awscfg.vpc_subnet)
+    ngfw = NGFWConfiguration(**ngfw)
+
     try:
         vpc.create_network_interface(0, awscfg.vpc_public, description='public-ngfw') 
         vpc.create_network_interface(1, awscfg.vpc_private, description='private-ngfw')
-        vpc.create_security_group('stonesoft-sg')
-        vpc.authorize_security_group_ingress('0.0.0.0/0', ip_protocol='-1')
+        vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
+        authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
         
-        deploy(vpc, ngfw, awscfg)
+        ngfw_init = deploy(vpc, ngfw, awscfg)
+        return task_runner(ngfw_init)
+            
         # If user wants a client AMI, launch in the background
         if awscfg.aws_client and awscfg.aws_client_ami:
             spin_up_host(awscfg.aws_keypair, vpc, awscfg.aws_instance_type, 
                          awscfg.aws_client_ami)
         
-    except (botocore.exceptions.ClientError, CreateEngineFailed) as e:
+    except (botocore.exceptions.ClientError, CreateEngineFailed,
+            NodeCommandFailed) as e:
         logger.error('Caught exception, rolling back: {}'.format(e))
         ngfw.rollback()
-        vpc.rollback() 
+        vpc.rollback()
+        return [('Failed deploying VPC', [str(e)])]
 
-def create_ngfw_in_existing_vpc(awscfg, ngfw):
+def create_ngfw_as_thread(subnet, public, awscfg, ngfw, queue):
     '''
     Use Case 2: Deploy NGFW into existing VPC
     -----------------------------------------
     This assumes the following:
     * You have an existing VPC with one or more subnets
     * Available elastic IP per NGFW
-    * Available /28 subnets in VPC network, one per NGFW
+    * Available /28 subnets in VPC network, one for each AZ NGFW
     
     When NGFW is injected into an existing VPC, the deployment strategy will
     obtain the defined network address space for the VPC. It will create a 
@@ -131,70 +150,91 @@ def create_ngfw_in_existing_vpc(awscfg, ngfw):
               create a unique /28 for each subnet if spread across AZ's.
               
     http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html
+    
+    :param list ec2.Subnet subnet: subnet to inject ngfw
+    :param AWSConfig awscfg: aws config
+    :param dict ngfw: ngfw configuration
     '''
-    # Connect to region and view all available VPCs
-    choice = get_available_vpcs('View available VPC configurations:')
-    vpc = VpcConfiguration(choice.split(' ')[0]).load()
-    
-    # Choose subnet to install NGFW, or all
-    vpcs = [x.cidr_block +' ('+x.availability_zone+')' for x in vpc.vpc.subnets.all()]
-    vpcs.append('all')
-    choice = custom_choice_menu('Available subnets;', vpcs)
+    vpc = VpcConfiguration(subnet.vpc.id).load()
+    ngfw = NGFWConfiguration(**ngfw)     
 
-    target = choice.split(' ')[0]
-    vpc_subnets = list(vpc.vpc.subnets.all()) # ec2.Subnet
-    itr = next_available_subnet(vpc_subnets, vpc.vpc.cidr_block) #Available subnet
+    try:
+        # Create public side network for interface 0 using the /28 network space
+        vpc.create_network_interface(0, cidr_block=public, 
+                                     availability_zone=subnet.availability_zone,
+                                     description='public ngfw')
+        vpc.create_network_interface(1, ec2_subnet=subnet, description='private ngfw')
+        vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
+        authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
     
-    if not target == 'all':
-        # Find matching subnet
-        for subnet in vpc_subnets:
-            if subnet.cidr_block == target:
-                
-                public = next(itr)
-                try:
-                    # Create public side network for interface 0 using the /28 network space
-                    vpc.create_network_interface(0, cidr_block=public, 
-                                                 availability_zone=subnet.availability_zone,
-                                                 description='public ngfw')
-                    vpc.create_network_interface(1, ec2_subnet=subnet, description='private ngfw')
-                    vpc.create_security_group('stonesoft-sg')
-                    vpc.authorize_security_group_ingress('0.0.0.0/0', ip_protocol='-1')
-                    deploy(vpc, ngfw, awscfg)    
-                
-                except (botocore.exceptions.ClientError, CreateEngineFailed) as e:
-                    logger.error('Caught exception, rolling back: {}'.format(e))
-                    ngfw.rollback()
-                
+        ngfw_init = deploy(vpc, ngfw, awscfg)
+        task_runner(ngfw_init, queue)
+    
+    except (botocore.exceptions.ClientError, CreateEngineFailed,
+            NodeCommandFailed) as e:
+        logger.error('Caught exception, rolling back: {}'.format(e))
+        queue.put((ngfw.name, [str(e)]))
+        ngfw.rollback()
+        rollback_existing_vpc(vpc, subnet)
+        
+def task_runner(ngfw, queue=None, sleep=5, duration=48):
+    """ 
+    Start the tasks running, first wait for the NGFW to 
+    make initial contact. Sleep and duration controls how
+    often polling occurs and for how long. Then execute
+    upload policy and return overall results to queue
+    """
+    # Wait max of 4 minutes for initial contact 
+    waiter = ngfw.get_waiter()
+    follower = None
+    for _ in range(duration):
+        ready = next(waiter)
+        if ready:
+            ngfw.bind_license()
+            follower = ready.upload_policy()
+            break
+        time.sleep(sleep)
+    
+    # Follower link can be none if upload policy times out 
+    result = []
+    if follower:
+        waiter = ngfw.policy_waiter(follower)
+        for _ in range(duration):
+            status = next(waiter)
+            if status is not None:
+                result = status
+                break
+            time.sleep(sleep)
     else:
-        # One NGFW will be created for each availability zone in VPC
-        import copy
-        for subnet in vpc_subnets:
-            
-            clone = copy.copy(vpc)
-            public = next(itr)
-            try:
-                # Create public side network for interface 0 using the /28 network space
-                clone.create_network_interface(0, cidr_block=public, 
-                                             availability_zone=subnet.availability_zone,
-                                             description='public ngfw')
-                clone.create_network_interface(1, ec2_subnet=subnet, description='private ngfw')
-                clone.create_security_group('stonesoft-sg')
-                clone.authorize_security_group_ingress('0.0.0.0/0', ip_protocol='-1')
-                deploy(clone, ngfw, awscfg)    
-                
-            except (botocore.exceptions.ClientError, CreateEngineFailed) as e:
-                logger.error('Caught exception, rolling back: {}'.format(e))
-                ngfw.rollback()
-
+        result = ['Timed out waiting for initial contact, manual intervention required']
+    if queue:
+        queue.put((ngfw.engine.name, result))
+    return [(ngfw.engine.name, result)]
+        
+def generate_report(results):
+    """
+    Generate report if errors
+    """
+    for result in results:
+        name, errors = result
+        if not errors:
+            logger.info('Finished running stonesoft deploy for: {}'.format(name))
+        else:
+            logger.error('Exception occurred deploying: {}, reason: {}'
+                         .format(name, errors[0]))
+        
 def deploy(vpc, ngfw, awscfg):
     """
     Execute the deploy. This can raise botocore.exceptions.ClientError or
     smc.api.exceptions.CreateEngineFailed exceptions and should be wrapped
     if needed by calling function/method.
+    
+    :return NGFWConfiguration updated instance
     """
     interfaces, gateway = vpc()
             
     ngfw(interfaces, gateway)
+    #NodeCommandFailed means initial contact failed and we don't have userdata
     userdata = ngfw.initial_contact()
     ngfw.add_contact_address(vpc.elastic_ip)
                         
@@ -202,7 +242,14 @@ def deploy(vpc, ngfw, awscfg):
                           userdata=userdata, 
                           imageid=awscfg.ngfw_ami,
                           instance_type=awscfg.aws_instance_type)
+
     instance.create_tags(Tags=create_tag())
+    
+    logger.info('Elastic (public) IP address is set to: {}, ngfw instance id: {}'
+                .format(vpc.elastic_ip, instance.id))
+                
+    logger.info('To connect to your NGFW AWS instance, execute the command: '
+                'ssh -i {}.pem aws@{}'.format(instance.key_name, vpc.elastic_ip))
     
     # Add security group to network interface 
     # (not supported on launch when network interfaces are specified)
@@ -213,103 +260,135 @@ def deploy(vpc, ngfw, awscfg):
                            
     # Rename NGFW to AMI instance id (availability zone)
     ngfw.engine.rename('{} ({})'.format(instance.id, vpc.availability_zone))
-                        
-    # Wait for AWS instance to show running state
-    for message in waiter(instance, 'running'):
-        logger.info(message)
-        
-                
-    logger.info('Elastic (public) IP address is set to: {}, ngfw instance id: {}'
-                .format(vpc.elastic_ip, instance.id))
-                
-    logger.info('To connect to your NGFW AWS instance, execute the command: '
-                'ssh -i {}.pem aws@{}'.format(instance.key_name, vpc.elastic_ip))
-                        
-    import time
-    start_time = time.time()
-    logger.info('Waiting for NGFW to do initial contact...')
-    for msg in monitor_status(ngfw.engine, status='No Policy Installed'):
-        logger.info(msg)
-                        
-    # After initial contact has been made, fire off policy upload 
-    ngfw.upload_policy()
-                        
-    if ngfw.task: # Upload policy task
-        for message in TaskMonitor(ngfw.task).watch():
-            logger.info(message)
-                        
-    if ngfw.has_errors:
-        logger.error('Errors were returned, manual intervention will be required: '
-                     '{}'.format(ngfw.has_errors))
-    logger.info("--- %s seconds ---" % (time.time() - start_time))
-    
+    ngfw.engine.reload() # Refresh engine cache                    
+    return ngfw
+
 def main():
-     
+
     logger = logging.getLogger()
+    formatter = logging.Formatter('%(asctime)s (%(threadName)-8s) [%(levelname)s] - %(name)s %(message)s')
     handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
     logger.addHandler(handler)
     
     import argparse
     parser = argparse.ArgumentParser(description='Stonesoft NGFW AWS Launcher')
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-i', '--interactive', action='store_true', help='Use interactive prompt mode')
     group.add_argument('-y', '--yaml', help='Specify yaml configuration file name')
+    group.add_argument('configure', nargs='?', help='Initial configuration wizard')
     actions = parser.add_mutually_exclusive_group()
-    actions.add_argument('-d', '--delete', action='store_true', help='Delete a VPC using prompt mode')
-    actions.add_argument('-r', '--remove', action='store_true', help='Remove ngfw from vpc (menu)')
-    actions.add_argument('-a', '--add', action='store_true', help='Add ngfw to vpc (menu)')
-    parser.add_argument('-n', '--nolog', action='store_true', help='Disable logging to console')
+    actions.add_argument('-d', '--delete', action='store_true', help='Delete a VPC (menu)')
+    actions.add_argument('-c', '--create', action='store_true', help='Create a VPC with NGFW')
+    actions.add_argument('-r', '--remove', action='store_true', help='Remove NGFW from VPC (menu)')
+    actions.add_argument('-a', '--add', action='store_true', help='Add NGFW to existing VPC (menu)')
+    actions.add_argument('-l', '--list', action='store_true', help='List NGFW installed in VPC (menu)')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
     
     if not any(vars(args).values()):
         parser.print_help()
         parser.exit()
-    elif args.delete and not (args.interactive or args.yaml):
-        parser.error('-d|--delete requires -i or -y specified')
-
-    if args.nolog:
-        logger.setLevel(logging.ERROR)
-        logging.getLogger('boto3').setLevel(logging.CRITICAL)
-        logging.getLogger('botocore').setLevel(logging.CRITICAL)
-    else:
-        logger.setLevel(logging.INFO)  
-
-    if args.interactive:
-        path = prompt_user()   # Run through user prompts, save, then safe_load
+ 
+    logger.setLevel(logging.INFO)
+    logging.getLogger('smc').setLevel(logging.ERROR)
+    logging.getLogger('boto3').setLevel(logging.CRITICAL)
+    logging.getLogger('botocore').setLevel(logging.CRITICAL)
+    
+    if args.verbose:
+        logging.getLogger('smc').setLevel(logging.INFO)
+        logging.getLogger('requests').setLevel(logging.INFO)
+        logging.getLogger('boto3').setLevel(logging.INFO)
+        logging.getLogger('botocore').setLevel(logging.INFO)
+    
+    print()
+    print('Stonesoft AWS Launcher')
+    print("======================")
+    print()
+    
+    if args.configure:
+        path = prompt_user()
+        print('Configuration complete. You can launch the script using '
+              'the -y {} for subsequent operations.'.format(path))
+        return
+    
     if args.yaml:
         path = args.yaml
     with open(path, 'r') as stream:
         try:
             data = yaml.safe_load(stream)
             awscfg = AWSConfig(**data.get('AWS'))
-            ngfw = NGFWConfiguration(**data.get('NGFW'))
+            ngfw = data.get('NGFW')
             smc = data.get('SMC')
         except yaml.YAMLError as exc:
             print(exc)
-            
-    ec2 = get_ec2_client(awscfg, prompt_for_region=True)
-    
+
+    get_ec2_client(awscfg, prompt_for_region=True)
     get_smc_session(smc)
     
     if args.remove:
-        remove_ngfw_from_vpc()
+        tagged = list_tagged_instances(select_vpc(as_instance=True))
+        if tagged:
+            instances = select_instance(tagged, as_instance=True)
+            remove_ngfw_from_vpc(instances)
+        else:
+            print('Nothing to remove.')
         return
     
-    validate(ngfw) #Raises if validation fails
+    if args.list:
+        instances = installed_as_list_view(select_vpc(as_instance=True))
+        print("instances: %s" % instances)
+        if instances:
+            template = '{0:22}|{1:20}|{2:12}|{3:12}|{4:12}' 
+            print(template.format('Instance ID', 'Availability Zone', 'Type', 'State', 'Launch Time'))
+            for instance in instances:
+                print(template.format(*instance))
+        return
+    
+    # Need the NGFW config validated for remaining options
+    validate(**ngfw) #Raises if validation fails
     
     if args.add:
-        create_ngfw_in_existing_vpc(awscfg, ngfw)
+        vpc = select_vpc(as_instance=True)
+        subnets = select_unused_subnet(vpc, as_instance=True)
+        if subnets:
+            start_time = time.time()
+            #create_ngfw_in_existing_vpc(subnets, awscfg, ngfw)
+            itr = next_available_subnet(list_all_subnets(vpc), vpc.cidr_block)
+            q = Queue()
+            pool = []
+            for subnet in subnets:
+                t = threading.Thread(target=create_ngfw_as_thread,
+                                     args=[subnet, next(itr), awscfg, ngfw, q])
+                t.start()
+                pool.append(t)
+                 
+            results = []    
+            start_time = time.time()
+            #Start all threads in thread pool
+            for thread in pool:
+                thread.join()
+                response = q.get()
+                results.append(response)
+            
+            generate_report(results)
+            logger.info("Process completed in %s seconds" % (time.time() - start_time))
+        else:
+            print('No unused subnets available.')
         return
     
     if args.delete:
-        vpcs = [x.id +' '+ x.cidr_block for x in ec2.vpcs.filter()]
-        choice = custom_choice_menu('Enter a VPC to remove: ', vpcs)
-        vpc = VpcConfiguration(choice.split(' ')[0]).load()
+        selection = select_delete_vpc()
+        vpc = VpcConfiguration(selection).load()
         vpc.rollback()
 
-    create_vpc_and_ngfw(awscfg, ngfw)
-
+    if args.create:
+        validate_aws(awscfg)
+        start_time = time.time()
+        results = create_vpc_and_ngfw(awscfg, ngfw)
+        generate_report(results)
+        logger.info("Process completed in %s seconds" % (time.time() - start_time))
+    
     session.logout()
 
 if __name__ == '__main__':

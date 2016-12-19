@@ -109,8 +109,6 @@ def write_cfg_to_yml(data, path=None):
         yaml.safe_dump(data, yaml_file, default_flow_style=False)
     print('Wrote ngfw-deploy.yml to dir %s' % path)
 
-suite = ValidatorSuite()
-
 def custom_choice_menu(prompt, lst_for_menu):
     suite.add_validator(ChoiceValidator(prompt))
     while True:
@@ -124,22 +122,31 @@ def custom_choice_menu(prompt, lst_for_menu):
                 if validate.field_name == prompt:
                     return validate.validate(value, lst_for_menu).get(prompt)
         except ValidationError as e:
-            print('Invalid choice: %s' % e)    
-    
+            print('Invalid choice: %s' % e) 
+
+def banner_message():
+    msg = ('Provide your configuration information to obtain a properly formatted\n'
+           'YAML configuration file. The YAML configuration file can then be used\n'
+           'to launch the application without intervention\n')
+    return msg
+
+suite = ValidatorSuite()
+   
 def prompt_user(path=None):
 
     from os.path import expanduser
-    from deploy.common import FW, FW_VPN, SMC, VERIFY_SMC, SMC_CACERT, \
-        VERIFY_SSL, AWS, AWS_CLIENT, FILE_PATH
+    from deploy.common import (
+            FW, FW_VPN, SMC_CACERT, VERIFY_SSL, AWS_REQ_BANNER,
+            AWS_REQ, AWS_OPT_BANNER, AWS_CLIENT, FILE_PATH, 
+            AWS_BANNER, AWS_OPT, AWS_OPT_ASK,
+            aws_creds, smc_creds)
     
-    #suite = ValidatorSuite()
-    suite.add_validator(DefaultValidator('smc_address', None))
+    suite.add_validator(DefaultValidator('smc_address', ''))
     suite.add_validator(RequiredValidator('smc_apikey'))
     suite.add_validator(DefaultValidator('smc_port', '8082'))
     suite.add_validator(DefaultValidator('smc_ssl', False))
     suite.add_validator(DefaultValidator('verify_ssl', False))
     suite.add_validator(RequiredValidator('ssl_cert_file'))
-    suite.add_validator(DefaultValidator('name', 'awsfirewall'))
     suite.add_validator(DefaultValidator('dns', '8.8.8.8'))
     suite.add_validator(DefaultValidator('default_nat', True))
     suite.add_validator(DefaultValidator('antivirus', False))
@@ -149,12 +156,13 @@ def prompt_user(path=None):
     suite.add_validator(ChoiceValidator('firewall_policy'))
     suite.add_validator(ChoiceValidator('vpn_policy'))
     suite.add_validator(ChoiceValidator('location'))
+    suite.add_validator(DefaultValidator('vpc', False))
     suite.add_validator(IPSubnetValidator('vpc_subnet'))
     suite.add_validator(IPSubnetValidator('vpc_private'))
     suite.add_validator(IPSubnetValidator('vpc_public'))
-    suite.add_validator(DefaultValidator('aws_access_key_id', None))
-    suite.add_validator(DefaultValidator('aws_secret_access_key', None))
-    suite.add_validator(DefaultValidator('aws_region', None))
+    suite.add_validator(DefaultValidator('aws_access_key_id', ''))
+    suite.add_validator(RequiredValidator('aws_secret_access_key'))
+    suite.add_validator(DefaultValidator('aws_region', ''))
     suite.add_validator(RequiredValidator('aws_keypair'))
     suite.add_validator(RequiredValidator('ngfw_ami'))
     suite.add_validator(DefaultValidator('aws_instance_type', 't2.micro'))
@@ -162,24 +170,32 @@ def prompt_user(path=None):
     suite.add_validator(RequiredValidator('aws_client_ami'))
     suite.add_validator(DefaultValidator('path', '{}/ngfw-deploy.yml'.format(expanduser("~"))))
     
+    print(banner_message())
     data = {}
-    for opt in SMC:
-        smc = prompt(opt)
-        if smc.get('smc_address'):
-            for opt in VERIFY_SMC:
-                smc.update(prompt(opt))
-                if smc.get('smc_ssl'):
-                    for opt in VERIFY_SSL:
-                        smc.update(prompt(opt))
-                        if smc.get('verify_ssl'):
-                            for opt in SMC_CACERT:
-                                smc.update(prompt(opt))
-    try:
-        get_smc_session(smc)
-        data.update({'SMC': smc}) # Save for yml
-    except SMCConnectionError:
-        raise
     
+    while True:
+        creds = smc_creds()
+        smc = {}
+        for opt in creds:
+            smc.update(prompt(opt))
+            if smc.get('smc_address'):
+                continue
+            break
+        if smc.get('smc_ssl'):
+            for opt in VERIFY_SSL:
+                smc.update(prompt(opt))
+            if smc.get('verify_ssl'):
+                for opt in SMC_CACERT:
+                    smc.update(prompt(opt)) 
+        try:
+            get_smc_session(smc)
+            # If provided during configure
+            if smc.get('smc_address'):
+                data.update({'SMC': smc}) 
+            break
+        except SMCConnectionError as e:
+            print('Failed connecting to SMC: {}'.format(e))
+        
     fw={}
     for opt in FW:
         fw.update(prompt(opt))
@@ -190,13 +206,30 @@ def prompt_user(path=None):
     data.update({'NGFW': fw})
     
     aws = {}
-    for opt in AWS:
-        aws.update(prompt(opt))
-        if aws.get('aws_client'):
-            for opt in AWS_CLIENT:
-                aws.update(prompt(opt))
-    data.update({'AWS': aws})
+    creds = aws_creds()
     
+    print(AWS_BANNER)
+    for opt in creds:
+        aws.update(prompt(opt))
+        if aws.get('aws_access_key_id'):
+            continue
+        break
+    
+    print(AWS_REQ_BANNER)
+    for opt in AWS_REQ:
+        aws.update(prompt(opt))
+        
+    print(AWS_OPT_BANNER)
+    for opt in AWS_OPT_ASK:
+        if prompt(opt).get('vpc'):
+            for opt in AWS_OPT:
+                aws.update(prompt(opt))
+            if aws.get('aws_client'):
+                for opt in AWS_CLIENT:
+                    aws.update(prompt(opt))
+       
+    data.update({'AWS': aws})
+
     path = prompt(FILE_PATH[0]).get('path')
     write_cfg_to_yml(data, path)
     return path
