@@ -5,7 +5,7 @@ def readme():
         return f.read()
 
 setup(name='stonesoft-aws',
-      version='0.2.4',
+      version='0.2.5',
       description='Stonesoft NGFW deployer for AWS',
       url='http://github.com/gabstopper/stonesoft-aws',
       author='David LePage',
@@ -14,17 +14,17 @@ setup(name='stonesoft-aws',
       packages=find_packages(),
       include_package_data=True,
       install_requires=[
-          'smc-python>=0.4.1',
-          'boto3',
-          'ipaddress',
-          'pyyaml'
+	    'smc-python>=0.4.2',
+        'boto3',
+        'ipaddress',
+        'pyyaml'
       ],
       entry_points={
         'console_scripts': [
                 'ngfw_launcher=deploy.__main__:main'
         ]
       },
-      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python-0.4.1'],
+      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python-0.4.2'],
       classifiers=[
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3.4",

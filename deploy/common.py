@@ -3,7 +3,7 @@ Menus for interactive prompting
 """
 from __future__ import unicode_literals
 from collections import namedtuple
-from deploy.ngfw import obtain_locations, obtain_fwpolicy, obtain_vpnpolicy
+from deploy.ngfw import obtain_fwpolicy, obtain_vpnpolicy
 
 FieldValidator = namedtuple('Validator', 'prompt, field choices')
 def fields(prompt, field, choices=None):
@@ -11,7 +11,7 @@ def fields(prompt, field, choices=None):
 
 # NGFW specific information. Choice menu's are pulled directly from SMC API
 FW = [fields('\nSelect a firewall policy: ', 'firewall_policy', choices=obtain_fwpolicy),
-      fields('Select a location for NGFW: ', 'location', choices=obtain_locations),
+      fields('Specify NAT address for SMC: ', 'nat_address'),
       fields('Enter DNS server, comma separated', 'dns'),
       fields('Use default NAT', 'default_nat'),
       fields('Enable anti-virus', 'antivirus'),
@@ -19,7 +19,8 @@ FW = [fields('\nSelect a firewall policy: ', 'firewall_policy', choices=obtain_f
       fields('Assign a VPN Policy', 'vpn')]
 
 FW_VPN = [fields('Enter VPN policy: ', 'vpn_policy', choices=obtain_vpnpolicy),
-          fields('VPN role (central|satellite)', 'vpn_role')]
+          fields('VPN role (central|satellite)', 'vpn_role'),
+          fields('Enter VPN networks (comma separated)', 'vpn_networks')]
 
 # Stonesoft Management Server information. Optional, if skipped, other menu's will
 # be ignored

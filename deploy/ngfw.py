@@ -11,11 +11,11 @@ from smc.vpn.policy import VPNPolicy
 from smc.core.engines import Layer3Firewall
 from smc.api.exceptions import TaskRunFailed, LicenseError,\
     LoadEngineFailed, ElementNotFound, MissingRequiredInput
-from smc.actions.tasks import Task
-from smc.actions.search import element_by_href_as_json  
+from smc.administration.tasks import Task
+from smc.actions.search import element_by_href_as_json, element_name_by_href  
 from smc.core.engine import Engine
 from smc.elements.collection import describe_vpn, describe_fw_policy,\
-    describe_location, describe_single_fw
+    describe_single_fw, describe_mgt_server, describe_log_server
 from smc.elements.other import prepare_contact_address
 
 logger = logging.getLogger(__name__)
@@ -24,30 +24,33 @@ class NGFWConfiguration(object):
     
     def __init__(self, dns=None, default_nat=True, 
                  antivirus=False, gti=False, location=None,
-                 firewall_policy=None, vpn_policy=None,
-                 vpn_role='central', reverse_connection=False, 
+                 firewall_policy=None, vpn=None,
+                 reverse_connection=False, nat_address=None,
                  **kwargs):
         self.engine = None
         self.dns = dns if dns else []
         self.default_nat = default_nat
         self.antivirus = antivirus
         self.gti = gti
-        self.location = location
-        self.vpn_role = vpn_role
-        self.vpn_policy = vpn_policy
+        self.location = location #Required if the SMC is behind NAT
+        self.nat_address = nat_address
+        self.vpn = vpn
         self.firewall_policy = firewall_policy
         self.reverse_connection = reverse_connection
         # Unique temporary name
         uid = uuid.uuid4()
         self.name = uid.hex
-
-    def __call__(self, interfaces, default_gateway):
+        
+    def __call__(self, interfaces, default_gateway, location_name):
         """
         Create NGFW
         
         :param list interfaces: dict of interface information
         :return: self
         """
+        # Location can be None if SMC is not behind NAT
+        location = self.add_location(location_name)
+        
         for interface in interfaces:
             address = interface.get('address')
             interface_id = interface.get('interface_id')
@@ -63,30 +66,39 @@ class NGFWConfiguration(object):
                                                default_nat=self.default_nat,
                                                enable_antivirus=self.antivirus,
                                                enable_gti=self.gti,
-                                               location_ref=location_helper(self.location))
+                                               location_ref=location)
                 engine.add_route(default_gateway, '0.0.0.0/0')
             else:
                 engine.physical_interface.add_single_node_interface(interface_id, 
                                                                     address, 
                                                                     network_value)
+   
         logger.info('Created NGFW successfully')
 
-        self.engine = engine.reload()
-        #Enable VPN on external interface if policy provided
-        if self.vpn_policy:
-            for intf in engine.internal_gateway.internal_endpoint.all():
-                if intf.name == mgmt_ip:
-                    intf.modify_attribute(enabled=True)
-            VPNPolicy.add_internal_gateway_to_vpn(engine.internal_gateway.href, 
-                                                  self.vpn_policy, 
-                                                  self.vpn_role)
-
+        #self.engine = engine.reload()
+        self.engine = engine
+        # Enable VPN on external interface if policy provided
+        if self.vpn:
+            try:
+                vpn_policy = self.vpn['vpn_policy']
+                for intf in engine.internal_gateway.internal_endpoint.all():
+                        if intf.name == mgmt_ip:
+                            intf.modify_attribute(enabled=True)
+                            intf.modify_attribute(nat_t=True)
+                    
+                role = self.vpn.get('vpn_role') if self.vpn.get('vpn_role') else 'central'
+                VPNPolicy.add_internal_gateway_to_vpn(engine.internal_gateway.href, 
+                                                      vpn_policy, 
+                                                      role)
+            except KeyError:
+                pass
+            
     def __copy__(self):
         clone = type(self)()
         clone.__dict__.update(self.__dict__)
         clone.network_interface = []
         return clone
-    
+        
     def upload_policy(self):
         """
         Upload policy to engine. This is executed after initial contact
@@ -99,7 +111,26 @@ class NGFWConfiguration(object):
             return next(self.engine.upload('{}'.format(self.firewall_policy)))
         except TaskRunFailed as e:
             logger.error(e)
-
+    
+    def add_location(self, location_name):
+        """
+        Create a unique Location for the AWS Firewall if the NAT address is set.
+        If nat_address is not set, then location will be None for the engine. 
+        This assumes that the SMC is not located behind NAT.
+        
+        :return: str of location or None
+        """
+        #TODO: If vpn policy isnt required, use a common NAT element?
+        if self.nat_address: #SMC behind NAT
+            # Add to management server
+            mgt = describe_mgt_server()
+            for server in mgt:
+                server.add_contact_address(self.nat_address, location_name)
+            log = describe_log_server()
+            for server in log:
+                server.add_contact_address(self.nat_address, location_name)
+            return location_helper(location_name)
+    
     def add_contact_address(self, elastic_ip):
         """
         Add the elastic IP public address as a contact address to the 
@@ -159,6 +190,9 @@ class NGFWConfiguration(object):
             yield None
 
     def policy_waiter(self, follower):
+        """
+        Wait for policy upload
+        """
         logger.info('Uploading policy for {}..'.format(self.engine.name))
         start_time = time.time()
         while True:
@@ -174,8 +208,7 @@ class NGFWConfiguration(object):
                 else:
                     yield []
             yield None
-                
-        
+                      
     def rollback(self):
         """
         Rollback the engine, remove from VPN Policy if it's assigned
@@ -190,8 +223,18 @@ class NGFWConfiguration(object):
                         gw.delete()
                 vpn.save()
                 vpn.close()
+            # If contact address exists, remove it
+            location_ref = engine.json.get('location_ref')
+            if element_name_by_href(location_ref) != 'Default':
+                logger.info('Deleting custom fw location: {}'.format(location_ref))
+                mgt = describe_mgt_server()
+                for server in mgt:
+                    server.remove_contact_address(location_ref)
+                log = describe_log_server()
+                for server in log:
+                    server.remove_contact_address(location_ref)
             result = engine.delete()
-            if result.code == 204:
+            if not result.msg:
                 logger.info('NGFW deleted successfully')
             else:
                 logger.error('Failed deleting NGFW: %s', result.msg)
@@ -208,11 +251,34 @@ def del_fw_from_smc(instance_ids):
     :param list instance_ids: string of instance ids
     :return: None
     """
+    '''
+    for policyvpn in describe_vpn():
+        policyvpn.open()
+        for gw in policyvpn.central_gateway_node.all():
+            if gw.name.startswith(engine.name):
+                print("Delete: %s" % gw.name)
+                gw.delete()
+                policyvpn.save()
+        policyvpn.close()
+    '''
+    #TODO: Remove from VPN policy, get reference???
     firewalls = describe_single_fw() # FW List
     for instance in instance_ids:
         for fw in firewalls:
             if fw.name.startswith(instance):
-                fw.delete()
+                # Remove Locations from mgmt / log server
+                fw.load()
+                location_ref = fw.get_attr_by_name('location_ref')
+                mgt = describe_mgt_server()
+                for server in mgt:
+                    server.remove_contact_address(location_ref)
+                log = describe_log_server()
+                for server in log:
+                    server.remove_contact_address(location_ref)
+                response = fw.delete()
+                if response.msg:
+                    logger.error('Could not delete fw: {}, {}'
+                                 .format(fw.name, response.msg))
                     
 def obtain_vpnpolicy(vpn_policy=None):
     """
@@ -246,30 +312,19 @@ def obtain_fwpolicy(firewall_policy=None):
             
     return [policy.name for policy in describe_fw_policy()]
 
-def obtain_locations(location=None):
-    """
-    Return available locations in SMC
-    
-    :return: list list of defined locations
-    """
-    locations = [loc.name for loc in describe_location()]
-    if location is None:
-        return locations
-    else:
-        if location not in locations:
-            raise MissingRequiredInput('Location element is not found: {}. '
-                                       'Available locations: {}'
-                                       .format(location, locations))
-
-def validate(firewall_policy, location, vpn_policy=None, 
-             antivirus=None, gti=None, dns=None, **kwargs):
+def validate(firewall_policy, vpn=None, antivirus=None, 
+             gti=None, dns=None, **kwargs):
     """
     Validate that settings provided are valid objects in SMC before anything
     is kicked off to AWS
     """
     obtain_fwpolicy(firewall_policy)
-    obtain_locations(location)
-    obtain_vpnpolicy(vpn_policy)
+    if vpn is not None:
+        try:
+            vpn_policy = vpn['vpn_policy']
+            obtain_vpnpolicy(vpn_policy)
+        except KeyError:
+            raise MissingRequiredInput('VPN setting present but missing vpn_policy.')
     # Make sure DNS is provided or SMC will reject AV/GTI
     if (antivirus or gti) and not dns:
         raise MissingRequiredInput('Anti-Virus and GTI require that DNS servers '

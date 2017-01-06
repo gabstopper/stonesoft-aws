@@ -1,4 +1,4 @@
-smc-python>=0.4.1
+smc-python>=0.4.2
 ipaddress==1.0.17
 boto3==1.4.1
 PyYAML==3.12

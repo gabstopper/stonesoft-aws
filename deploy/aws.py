@@ -32,7 +32,6 @@ class VpcConfiguration(object):
     
     :ivar vpcid: ID of the VPC
     :ivar vpc: Reference to the VPC object
-    :ivar alt_route_table: reference to the alternate route table for private networks
     :ivar elastic_ip: Elastic IP address, will be used for contact address
     :ivar private_subnet: Private subnet used to spin up client instance
     :ivar internet_gateway: AWS internet gateway object reference
@@ -47,7 +46,6 @@ class VpcConfiguration(object):
         self.elastic_ip = None
         self.public_subnet = None
         self.private_subnet = None
-        self.alt_route_table = None
         self.network_interface = [] #[{interface_id: ec2.NetworkInterface}]
         self.availability_zone = None
     
@@ -67,7 +65,7 @@ class VpcConfiguration(object):
                 except botocore.exceptions.ClientError:
                     time.sleep(2)
             
-        logger.info('Loaded VPC with id: {} and cidr_block: {}'
+        logger.info('Loaded VPC with id: {} with cidr_block: {}'
                     .format(self.vpc.vpc_id, self.vpc.cidr_block))
         return self
    
@@ -141,7 +139,7 @@ class VpcConfiguration(object):
                   value. If ec2_subnet is specified, this existing subnet will be used
         """
         if not cidr_block and not ec2_subnet:
-            raise ValueError('You must specify a cidr to create or existing ec2 subnet')
+            raise ValueError('You must specify a CIDR to create or existing ec2 subnet')
         
         if cidr_block:
             subnet = self.create_subnet(cidr_block, availability_zone)
@@ -151,6 +149,7 @@ class VpcConfiguration(object):
     
         #Assign static address and elastic to eth0 (public)
         if interface_id == 0:
+            self.public_subnet = subnet
             external = ipaddress.ip_network(u'{}'.format(cidr_block))
             external = str(list(external)[-2]) #broadcast address -1
             interface = subnet.create_network_interface(PrivateIpAddress=external,
@@ -158,12 +157,11 @@ class VpcConfiguration(object):
             # Wait to make sure it's available
             wait_for_resource(interface, self.vpc.network_interfaces.all())
             self.network_interface.append({interface_id: interface})
-            
+
             # Set elastic and associate
             allocation_id = self.allocate_elastic_ip()
             address = ec2.VpcAddress(allocation_id)
             address.associate(NetworkInterfaceId=interface.network_interface_id)
-            self.public_subnet = subnet
         else: 
             # This attaches to private side networks
             interface = subnet.create_network_interface(Description=description)
@@ -172,51 +170,8 @@ class VpcConfiguration(object):
             self.network_interface.append({interface_id: interface})
             self.private_subnet = subnet
             
-            alt_route_table = self.vpc.create_route_table()
-            alt_route_table.create_tags(Tags=create_tag())
-            self.alt_route_table = alt_route_table
+            self.assign_route_table(subnet, interface)
             
-            logger.info('Associating subnet ID: {} to alternate route table'
-                        .format(subnet.subnet_id))
-            try:
-                alt_route_table.associate_with_subnet(SubnetId=subnet.subnet_id)
-            except botocore.exceptions.ClientError as e:
-                if e.response['Error']['Code'] == 'Resource.AlreadyAssociated':
-                    # Subnet is already associated with a non-Main route table.
-                    # To preserve the configuration, create rules that were manually
-                    # created and add a stonesoft tag value = pre-existing route table.
-                    # This allows the route table to be mapped back if NGFW is removed.
-                    filter_rt = list(ec2.route_tables.filter(Filters=[{
-                                                                'Name': 'association.subnet-id',
-                                                                'Values': [subnet.subnet_id]}]))
-                    assigned_rt = filter_rt.pop()
-                    logger.warning('{} is already associated with route table: {}'
-                                   .format(subnet.subnet_id, assigned_rt.id))
-                    for route in assigned_rt.routes:
-                        # Copy manually created routes
-                        if route.origin == 'CreateRoute' and \
-                            route.destination_cidr_block != '0.0.0.0/0':
-                            self.alt_route_table.create_route(
-                                    DestinationCidrBlock=route.destination_cidr_block,
-                                    GatewayId=route.gateway_id)
-                                    #InstanceId='',
-                                    #NetworkInterfaceId='')
-                        # Disassociate the existing route table
-                        for assoc in assigned_rt.associations.all():
-                            if assoc.subnet_id == subnet.subnet_id:
-                                logger.info('Removing route tbl assoc: {} for subnet: {}'
-                                            .format(assoc.route_table_id, assoc.subnet_id))
-                                assoc.delete()
-                        # Associate it to our table with tag: {'stonesoft': original_route_table_id}
-                        alt_route_table.associate_with_subnet(SubnetId=subnet.subnet_id)
-                        # Add original route table ID to stonesoft tag
-                        alt_route_table.create_tags(Tags=create_tag(value=assigned_rt.id))
-            
-            logger.info('Setting default route using alternate route table for '
-                        'interface {}'.format(interface.network_interface_id))
-            alt_route_table.create_route(DestinationCidrBlock='0.0.0.0/0',
-                                         NetworkInterfaceId=interface.network_interface_id)
-          
         interface.modify_attribute(SourceDestCheck={'Value': False})
         self.availability_zone = interface.availability_zone
         
@@ -239,7 +194,58 @@ class VpcConfiguration(object):
                     .format(subnet.subnet_id, subnet.availability_zone))
         subnet.create_tags(Tags=create_tag())
         return subnet
-
+    
+    def assign_route_table(self, subnet, interface):
+        """
+        Assign the route table to subnet. If non-Main route table was
+        being used, assign route_table.id to subnet 'stonesoft' tag so 
+        it can be re-assigned if NGFW is removed.
+        
+        :param ec2.Subnet subnet: used to associate route table
+        :param ec2.NetworkInterface interface: used for default route
+        """
+        alt_route_table = self.vpc.create_route_table()
+        alt_route_table.create_tags(Tags=create_tag())
+                
+        logger.info('Associating subnet ID: {} to alternate route table'
+                    .format(subnet.subnet_id))
+        try:
+            alt_route_table.associate_with_subnet(SubnetId=subnet.subnet_id)
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == 'Resource.AlreadyAssociated':
+                # Subnet is already associated with a non-Main route table.
+                # To preserve the configuration, create rules that were manually
+                # created and add a stonesoft tag value = pre-existing route table.
+                # This allows the route table to be mapped back if NGFW is removed.
+                filter_rt = list(ec2.route_tables.filter(Filters=[{
+                                                        'Name': 'association.subnet-id',
+                                                        'Values': [subnet.subnet_id]}]))
+                assigned_rt = filter_rt.pop()
+                logger.warning('{} is already associated with route table: {}'
+                               .format(subnet.subnet_id, assigned_rt.id))
+                for route in assigned_rt.routes:
+                    # Copy manually created routes
+                    if route.origin == 'CreateRoute' and \
+                        route.destination_cidr_block != '0.0.0.0/0':
+                        alt_route_table.create_route(
+                                DestinationCidrBlock=route.destination_cidr_block,
+                                GatewayId=route.gateway_id)
+                    # Disassociate the existing route table
+                    for assoc in assigned_rt.associations.all():
+                        if assoc.subnet_id == subnet.subnet_id:
+                            logger.info('Removing route tbl assoc: {} for subnet: {}'
+                                        .format(assoc.route_table_id, assoc.subnet_id))
+                            assoc.delete()
+                    # Associate it to new alt route table
+                    alt_route_table.associate_with_subnet(SubnetId=subnet.subnet_id)
+                    # Add original route table ID to tag {'stonesoft': route_table.id}
+                    alt_route_table.create_tags(Tags=create_tag(value=assigned_rt.id))
+            
+        logger.info('Setting default route using alternate route table for '
+                    'interface {}'.format(interface.network_interface_id))
+        alt_route_table.create_route(DestinationCidrBlock='0.0.0.0/0',
+                                     NetworkInterfaceId=interface.network_interface_id)
+    
     def allocate_elastic_ip(self):
         """ 
         Create elastic IP address for network interface. An elastic IP is
@@ -261,10 +267,10 @@ class VpcConfiguration(object):
                         eip = unassigned
                         break
                 if not eip: raise
-                self.elastic_ip = eip.get('PublicIp')
-                return eip.get('AllocationId')
             else: raise
-         
+        self.elastic_ip = eip.get('PublicIp')
+        return eip.get('AllocationId')
+     
     def __call__(self):
         """
         Retrieve interface map information for NGFW
@@ -324,7 +330,7 @@ class VpcConfiguration(object):
         """ 
         In case of failure, convenience to wrap in try/except and remove
         the VPC. If there is a running EC2 instance, this will terminate
-        that instnace, remove all other dependencies and delete the VPC.
+        that instance, remove all other dependencies and delete the VPC.
         Typically this is best run when attempting to create the entire
         VPC.
         """
@@ -367,22 +373,24 @@ class VpcConfiguration(object):
         self.vpc.delete()
         logger.info("Deleted vpc: {}".format(self.vpc.vpc_id))
 
-def rollback_existing_vpc(vpc, subnet):
+def rollback_existing_vpc(vpc, subnets):
     """
     If a failure occurs during injection into AWS VPC, 
     reverse the changes back to original
+    
+    :param VPCConfiguration vpc: VPCConfiguration instance
+    :param list ec2.Subnet subnets: subnets for this VPC
     """
-    if vpc.alt_route_table:
-        if vpc.alt_route_table.associations:
-            for assoc in vpc.alt_route_table.associations.all():
-                if assoc.subnet_id in subnet.id:
+    subnet_ids = [subnet.id for subnet in subnets]
+    for rt in list_tagged_rtables(vpc.vpc):
+        if rt.associations:
+            for assoc in rt.associations.all(): 
+                if assoc.subnet_id in subnet_ids:
                     logger.info('Removing route tbl assoc: {} for subnet: {}'
                                 .format(assoc.route_table_id, assoc.subnet_id))
                     assoc.delete()
-            vpc.alt_route_table.delete()
-        else:
-            vpc.alt_route_table.delete()
-    
+                    rt.delete()
+
     for intf in vpc.network_interface:
         for _, interface in intf.items():
             interface.delete()
@@ -482,7 +490,23 @@ def spin_up_host(key_pair, vpc, instance_type='t2.micro',
         ntwk = data.get('PrivateIpAddress')
     logger.info('Client instance created: {} with keypair: {} at ipaddress: {}'
                 .format(instance.id, instance.key_name, ntwk))
+
+def map_az_to_subnet(subnets):
+    """
+    Given list of subnets, return a dict with AZ as key and 
+    list of subnets as value. Used when selecting 'all' in add menu,
+    or when multiple selections are made. 
     
+    :return: dict unique: {az: [subnets]}
+    """
+    unique = {}
+    for subnet in subnets:
+        if subnet.availability_zone not in unique:
+            unique[subnet.availability_zone] = [subnet]
+        else:
+            unique[subnet.availability_zone].append(subnet)
+    return unique
+
 def list_tagged_instances(vpc):
     """
     Instances tagged with 'stonesoft'
@@ -526,8 +550,8 @@ def list_tagged_rtables(vpc):
 
 def list_unused_subnets(vpc):
     """
-    An unused subnet is one that does use a tagged route table or
-    is tagged itself.
+    An unused subnet is one that is not tagged or that does not 
+    use a tagged route table.
     
     :return: list ec2.Subnet
     """
@@ -559,7 +583,9 @@ def installed_as_list_view(vpc):
     for instance in list_tagged_instances(vpc):
         instance_id = instance.id
         azone = instance.subnet.availability_zone
-            
+        
+        for intf in instance.network_interfaces:
+            print(intf.id, intf.private_ip_address, intf.subnet_id)   
         dt = '{:{dfmt} {tfmt}}'.format(instance.launch_time, dfmt='%Y-%m-%d', tfmt='%H:%M %Z')
         instances.append((instance_id, azone, instance.instance_type,
                           instance.state.get('Name'), dt))
@@ -637,6 +663,13 @@ def select_delete_vpc(prompt='Enter a VPC to remove: '):
     """
     vpcs = [x.id +' '+ x.cidr_block for x in ec2.vpcs.filter()]
     return custom_choice_menu(prompt, vpcs).split(' ')[0]    
+
+def select_deploy_style(prompt='Choose installation style:'):
+    """
+    Prompt for the deployment method. 
+    """
+    choice = custom_choice_menu(prompt, ['Inline Gateway', 'NAT Gateway'])
+    return choice
             
 def next_available_subnet(az_subnets=None, vpc_cidr=None):
     """
@@ -686,13 +719,16 @@ def remove_ngfw_from_vpc(instances):
     logger.info('Remove instances: {}'.format(instances))
 
     # Subnet's are last to be removed
-    removeables, untagged_subnets = ([] for i in range(2))
+    removeables = []
     
     tagged_subnets = [tagged.id for tagged in list_tagged_subnets(vpc)]
-
+    all_subnets = [untagged.id for untagged in list_all_subnets(vpc)]
+    # Used to disassociate existing subnet route table
+    untagged_subnets = list(set(all_subnets) - set(tagged_subnets))
+    
     for instance in instances:
     
-        for dependency in instance.network_interfaces:           
+        for dependency in instance.network_interfaces:
             dependency.modify_attribute(Attachment={
                                     'AttachmentId': dependency.attachment['AttachmentId'],
                                     'DeleteOnTermination': True})
@@ -700,9 +736,7 @@ def remove_ngfw_from_vpc(instances):
             subnet = dependency.subnet_id
             if subnet in tagged_subnets:
                 removeables.append(subnet)
-            else:
-                untagged_subnets.append(subnet)
-        
+
         logger.info('Terminating instance: {}'.format(instance.instance_id))
         instance.terminate()
     
@@ -710,7 +744,7 @@ def remove_ngfw_from_vpc(instances):
     # subnet had a previous route table assigned, it will be reassigned.
     for rt in list_tagged_rtables(vpc):
         if rt.associations:
-            for assoc in rt.associations.all():
+            for assoc in rt.associations.all(): 
                 if assoc.subnet_id in untagged_subnets:
                     logger.info('Removing route tbl assoc: {} for subnet: {}'
                                 .format(assoc.route_table_id, assoc.subnet_id))
@@ -743,20 +777,31 @@ def remove_ngfw_from_vpc(instances):
     
     logger.info('Completed successfully.')  
 
-def validate_aws(awscfg):
+def validate_aws(awscfg, vpc_create=False):
     """
-    VPC settings required for creating a VPC
+    Validate AWS settings. For any add or create operations, the
+    keypair and AMI are required. If this is for a VPC create, then
+    also verify the subnets are provided.
+    
+    :raises: InvalidKeyPair.NotFound, InvalidAMIId.NotFound, 
+             smc.api.exceptions.MissingRequiredInput
     """
-    missing = []
-    if not awscfg.vpc_subnet:
-        missing.append('vpc_subnet')
-    if not awscfg.vpc_private:
-        missing.append('vpc_private')
-    if not awscfg.vpc_public:
-        missing.append('vpc_public')
-    if missing:
-        raise MissingRequiredInput('Missing required settings in configuration: {}'
-                                   .format(missing))
+    # Verify the AWS key pair exists, raises InvalidKeyPair.NotFound
+    ec2.meta.client.describe_key_pairs(KeyNames=[awscfg.aws_keypair])
+    # Verify AMI is valid; raises InvalidAMIID.NotFound
+    ec2.meta.client.describe_images(ImageIds=[awscfg.ngfw_ami])
+    
+    if vpc_create: 
+        missing = []
+        if not awscfg.vpc_subnet:
+            missing.append('vpc_subnet')
+        if not awscfg.vpc_private:
+            missing.append('vpc_private')
+        if not awscfg.vpc_public:
+            missing.append('vpc_public')
+        if missing:
+            raise MissingRequiredInput('Missing required settings in configuration: {}'
+                                       .format(missing))
     
 aws = namedtuple('aws', 'aws_keypair ngfw_ami aws_access_key_id aws_secret_access_key\
                          aws_client vpc_public vpc_private vpc_subnet aws_instance_type\
@@ -791,11 +836,12 @@ def get_ec2_client(awscfg, prompt_for_region=False):
     global ec2
     # Raises NoRegionError
     if awscfg.aws_access_key_id and awscfg.aws_secret_access_key:
-        if prompt_for_region:
-            if not awscfg.aws_region:
+        if not awscfg.aws_region and prompt_for_region:
                 aws_session = boto3.session.Session()
                 region = custom_choice_menu('Enter a region:', 
                                             aws_session.get_available_regions('ec2'))
+        else:
+            region = awscfg.aws_region
         ec2 = boto3.resource('ec2',
                              aws_access_key_id=awscfg.aws_access_key_id,
                              aws_secret_access_key=awscfg.aws_secret_access_key,
@@ -803,7 +849,6 @@ def get_ec2_client(awscfg, prompt_for_region=False):
     else:
         # Resolve AWS credentials using normal boto3 methods
         s = boto3.session.Session()
-        logger.debug("Using boto3 for credentials, found: %s" % s.available_profiles)
         access_key = s.get_credentials().access_key
         secret_key = s.get_credentials().secret_key
         region = s.region_name
@@ -817,9 +862,5 @@ def get_ec2_client(awscfg, prompt_for_region=False):
                              region_name=region)
         
     logger.debug('Obtained ec2 client: %s' % ec2)
-    # Verify the AWS key pair exists, raises InvalidKeyPair.NotFound
-    ec2.meta.client.describe_key_pairs(KeyNames=[awscfg.aws_keypair])
-    # Verify AMI is valid; raises InvalidAMIID.NotFound
-    ec2.meta.client.describe_images(ImageIds=[awscfg.ngfw_ami])
-    
     return ec2
+    

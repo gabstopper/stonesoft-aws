@@ -152,10 +152,11 @@ def prompt_user(path=None):
     suite.add_validator(DefaultValidator('antivirus', False))
     suite.add_validator(DefaultValidator('gti', False))
     suite.add_validator(DefaultValidator('vpn', False))
-    suite.add_validator(DefaultValidator('vpn_role', 'central'))
     suite.add_validator(ChoiceValidator('firewall_policy'))
     suite.add_validator(ChoiceValidator('vpn_policy'))
-    suite.add_validator(ChoiceValidator('location'))
+    suite.add_validator(DefaultValidator('vpn_role', 'central'))
+    suite.add_validator(DefaultValidator('vpn_networks', ''))
+    suite.add_validator(DefaultValidator('nat_address', ''))
     suite.add_validator(DefaultValidator('vpc', False))
     suite.add_validator(IPSubnetValidator('vpc_subnet'))
     suite.add_validator(IPSubnetValidator('vpc_private'))
@@ -200,11 +201,15 @@ def prompt_user(path=None):
     for opt in FW:
         fw.update(prompt(opt))
     if fw.get('vpn'):
+        vpn_sub = {}
         for opt in FW_VPN:
-            fw.update(prompt(opt))
+            vpn_sub.update(prompt(opt))
+        if vpn_sub.get('vpn_networks'):
+            vpn_sub.update(vpn_networks=vpn_sub.get('vpn_networks').split(','))
     fw.update(dns=fw.get('dns').split(','))
+    fw.update(vpn=vpn_sub)
     data.update({'NGFW': fw})
-    
+
     aws = {}
     creds = aws_creds()
     
@@ -227,7 +232,9 @@ def prompt_user(path=None):
             if aws.get('aws_client'):
                 for opt in AWS_CLIENT:
                     aws.update(prompt(opt))
-       
+    
+    if not aws.get('aws_access_key_id'):
+        aws.pop('aws_access_key_id', None)   
     data.update({'AWS': aws})
 
     path = prompt(FILE_PATH[0]).get('path')

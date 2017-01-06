@@ -64,7 +64,7 @@ from deploy.aws import (
     select_unused_subnet, select_instance, 
     select_delete_vpc, get_ec2_client, 
     authorize_security_group_ingress, create_security_group,
-    rollback_existing_vpc, validate_aws)
+    rollback_existing_vpc, validate_aws, select_deploy_style, map_az_to_subnet)
 from deploy.ngfw import NGFWConfiguration, validate, get_smc_session
 from deploy.validators import prompt_user
 from smc.api.exceptions import CreateEngineFailed, NodeCommandFailed
@@ -122,7 +122,7 @@ def create_vpc_and_ngfw(awscfg, ngfw):
         vpc.rollback()
         return [('Failed deploying VPC', [str(e)])]
 
-def create_ngfw_as_thread(subnet, public, awscfg, ngfw, queue):
+def create_inline_ngfw(subnets, public, awscfg, ngfw, queue):
     '''
     Use Case 2: Deploy NGFW into existing VPC
     -----------------------------------------
@@ -136,7 +136,7 @@ def create_ngfw_as_thread(subnet, public, awscfg, ngfw, queue):
     'private' supernet using a /28 subnet on the uppermost side of the VPC
     network. For example, a VPC network of 172.16.0.0/16 will result in a 
     new subnet created 172.31.255.240/28. This will act as the 'public' side of
-    the NGFW (creating a small subnet allows wasted address space). This public
+    the NGFW (creating a small subnet prevents wasted address space). This public
     side network will use the "Main" route table that should already use the
     AWS Internet Gateway as it's next hop, allowing internet connectivity.
     Next, each a network interface will be created in each subnet that exists in
@@ -151,21 +151,31 @@ def create_ngfw_as_thread(subnet, public, awscfg, ngfw, queue):
               
     http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html
     
-    :param list ec2.Subnet subnet: subnet to inject ngfw
+    :param list ec2.Subnet subnets: subnets to inject ngfw
+    :param str public: public network for ngfw instance
     :param AWSConfig awscfg: aws config
     :param dict ngfw: ngfw configuration
+    :param Queue queue: reference to result queue
     '''
-    vpc = VpcConfiguration(subnet.vpc.id).load()
+    vpc = VpcConfiguration(subnets[0].vpc.id).load()
     ngfw = NGFWConfiguration(**ngfw)     
-
+    
+    logger.info('Creating NGFW as Inline Gateway in availability zone: {} with '
+                'subnets: {}'.format(subnets[0].availability_zone, subnets))
+    
     try:
         # Create public side network for interface 0 using the /28 network space
         vpc.create_network_interface(0, cidr_block=public, 
-                                     availability_zone=subnet.availability_zone,
+                                     availability_zone=subnets[0].availability_zone,
                                      description='public ngfw')
-        vpc.create_network_interface(1, ec2_subnet=subnet, description='private ngfw')
         vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
         authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
+        
+        # Each ec2 Subnet gets it's own network interface and route table
+        intf = 1
+        for subnet in subnets:
+            vpc.create_network_interface(intf, ec2_subnet=subnet, description='private ngfw')
+            intf += 1
     
         ngfw_init = deploy(vpc, ngfw, awscfg)
         task_runner(ngfw_init, queue)
@@ -173,10 +183,41 @@ def create_ngfw_as_thread(subnet, public, awscfg, ngfw, queue):
     except (botocore.exceptions.ClientError, CreateEngineFailed,
             NodeCommandFailed) as e:
         logger.error('Caught exception, rolling back: {}'.format(e))
-        queue.put((ngfw.name, [str(e)]))
+        queue.put(('{}, {}:'.format(subnets[0].availability_zone, subnets), [str(e)]))
         ngfw.rollback()
-        rollback_existing_vpc(vpc, subnet)
+        rollback_existing_vpc(vpc, subnets)
+
+def create_as_nat_gateway(subnets, public, awscfg, ngfw, queue):
+    
+    vpc = VpcConfiguration(subnets[0].vpc.id).load()
+    ngfw = NGFWConfiguration(**ngfw)
+
+    logger.info('Creating NGFW as a NAT Gateway in availability zone: {} with '
+                'subnets: {}'.format(subnets[0].availability_zone, subnets))
+    
+    try:
+        # Create public side network for interface 0 using the /28 network space
+        vpc.create_network_interface(0, cidr_block=public, 
+                                     availability_zone=subnets[0].availability_zone,
+                                     description='public ngfw')
+        vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
+        authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
+        #TODO: Make inbound access control configurable?
         
+        # Change route tables of any subnets specified to use NAT Gateway
+        interface = [intf.get(0) for intf in vpc.network_interface][0]
+        for subnet in subnets:
+            vpc.assign_route_table(subnet, interface)
+        ngfw_init = deploy(vpc, ngfw, awscfg)
+        task_runner(ngfw_init, queue)
+        
+    except (botocore.exceptions.ClientError, CreateEngineFailed,
+            NodeCommandFailed) as e:
+        logger.error('Caught exception, rolling back: {}'.format(e))
+        queue.put(('{}, {}:'.format(subnets[0].availability_zone, subnets), [str(e)]))
+        ngfw.rollback()
+        rollback_existing_vpc(vpc, subnets)
+                
 def task_runner(ngfw, queue=None, sleep=5, duration=48):
     """ 
     Start the tasks running, first wait for the NGFW to 
@@ -232,19 +273,23 @@ def deploy(vpc, ngfw, awscfg):
     :return NGFWConfiguration updated instance
     """
     interfaces, gateway = vpc()
-            
-    ngfw(interfaces, gateway)
+    
+    # Specific location for this Firewall
+    location_name = '{}-{}'.format(vpc.availability_zone,vpc.elastic_ip)
+           
+    ngfw(interfaces, gateway, location_name)
+    
     #NodeCommandFailed means initial contact failed and we don't have userdata
     userdata = ngfw.initial_contact()
     ngfw.add_contact_address(vpc.elastic_ip)
-                        
+
     instance = vpc.launch(key_pair=awscfg.aws_keypair, 
                           userdata=userdata, 
                           imageid=awscfg.ngfw_ami,
                           instance_type=awscfg.aws_instance_type)
 
     instance.create_tags(Tags=create_tag())
-    
+
     logger.info('Elastic (public) IP address is set to: {}, ngfw instance id: {}'
                 .format(vpc.elastic_ip, instance.id))
                 
@@ -260,7 +305,7 @@ def deploy(vpc, ngfw, awscfg):
                            
     # Rename NGFW to AMI instance id (availability zone)
     ngfw.engine.rename('{} ({})'.format(instance.id, vpc.availability_zone))
-    ngfw.engine.reload() # Refresh engine cache                    
+    #ngfw.engine.reload() # Refresh engine cache                    
     return ngfw
 
 def main():
@@ -335,9 +380,9 @@ def main():
             print('Nothing to remove.')
         return
     
+    #TODO: If remnants are left over, list does not show whats still tagged
     if args.list:
         instances = installed_as_list_view(select_vpc(as_instance=True))
-        print("instances: %s" % instances)
         if instances:
             template = '{0:22}|{1:20}|{2:12}|{3:12}|{4:12}' 
             print(template.format('Instance ID', 'Availability Zone', 'Type', 'State', 'Launch Time'))
@@ -349,28 +394,43 @@ def main():
     validate(**ngfw) #Raises if validation fails
     
     if args.add:
+        validate_aws(awscfg)
         vpc = select_vpc(as_instance=True)
         subnets = select_unused_subnet(vpc, as_instance=True)
         if subnets:
-            start_time = time.time()
-            #create_ngfw_in_existing_vpc(subnets, awscfg, ngfw)
+          
+            style = select_deploy_style()
+            if style == 'Inline Gateway':
+                style = create_inline_ngfw
+            else: #NAT Gateway
+                style = create_as_nat_gateway
+              
+            subnet_map = map_az_to_subnet(subnets)
+           
             itr = next_available_subnet(list_all_subnets(vpc), vpc.cidr_block)
             q = Queue()
-            pool = []
-            for subnet in subnets:
-                t = threading.Thread(target=create_ngfw_as_thread,
-                                     args=[subnet, next(itr), awscfg, ngfw, q])
-                t.start()
-                pool.append(t)
-                 
-            results = []    
-            start_time = time.time()
-            #Start all threads in thread pool
-            for thread in pool:
-                thread.join()
-                response = q.get()
-                results.append(response)
-            
+            pool, subnet_keys, results = ([] for i in range(3))
+            try:
+                for zone, subnets in subnet_map.items():
+                    t = threading.Thread(target=style,
+                                         args=[subnets, next(itr), awscfg, ngfw, q])
+                    pool.append(t)
+                    subnet_keys.append(zone)
+            except StopIteration:
+                for zone in subnet_keys:
+                    del subnet_map[zone]
+                results.append((subnet_map, ['No available network addresses in VPC to create '
+                                             'NGFW in the following subnets. Skipping.']))
+            finally:
+                for thread in pool:
+                    thread.start()      
+                start_time = time.time()
+        
+                for thread in pool:
+                    thread.join()
+                    response = q.get()
+                    results.append(response)
+                    
             generate_report(results)
             logger.info("Process completed in %s seconds" % (time.time() - start_time))
         else:
@@ -383,7 +443,7 @@ def main():
         vpc.rollback()
 
     if args.create:
-        validate_aws(awscfg)
+        validate_aws(awscfg, vpc_create=True)
         start_time = time.time()
         results = create_vpc_and_ngfw(awscfg, ngfw)
         generate_report(results)
