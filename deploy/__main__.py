@@ -64,8 +64,10 @@ from deploy.aws import (
     select_unused_subnet, select_instance, 
     select_delete_vpc, get_ec2_client, 
     authorize_security_group_ingress, create_security_group,
-    rollback_existing_vpc, validate_aws, select_deploy_style, map_az_to_subnet)
-from deploy.ngfw import NGFWConfiguration, validate, get_smc_session
+    rollback_existing_vpc, validate_aws, select_deploy_style, map_az_to_subnet,
+    VpcConfigurationError, rollback)
+from deploy.ngfw import NGFWConfiguration, validate, get_smc_session,\
+    del_fw_from_smc
 from deploy.validators import prompt_user
 from smc.api.exceptions import CreateEngineFailed, NodeCommandFailed
 try:
@@ -118,8 +120,7 @@ def create_vpc_and_ngfw(awscfg, ngfw):
     except (botocore.exceptions.ClientError, CreateEngineFailed,
             NodeCommandFailed) as e:
         logger.error('Caught exception, rolling back: {}'.format(e))
-        ngfw.rollback()
-        vpc.rollback()
+        rollback(vpc.vpc)
         return [('Failed deploying VPC', [str(e)])]
 
 def create_inline_ngfw(subnets, public, awscfg, ngfw, queue):
@@ -184,8 +185,9 @@ def create_inline_ngfw(subnets, public, awscfg, ngfw, queue):
             NodeCommandFailed) as e:
         logger.error('Caught exception, rolling back: {}'.format(e))
         queue.put(('{}, {}:'.format(subnets[0].availability_zone, subnets), [str(e)]))
-        ngfw.rollback()
         rollback_existing_vpc(vpc, subnets)
+        print("Deleting FW: %s" % ngfw.name)
+        del_fw_from_smc([ngfw.name])
 
 def create_as_nat_gateway(subnets, public, awscfg, ngfw, queue):
     
@@ -215,8 +217,9 @@ def create_as_nat_gateway(subnets, public, awscfg, ngfw, queue):
             NodeCommandFailed) as e:
         logger.error('Caught exception, rolling back: {}'.format(e))
         queue.put(('{}, {}:'.format(subnets[0].availability_zone, subnets), [str(e)]))
-        ngfw.rollback()
         rollback_existing_vpc(vpc, subnets)
+        print("Deleting FW: %s" % ngfw.name)
+        del_fw_from_smc([ngfw.name])
                 
 def task_runner(ngfw, queue=None, sleep=5, duration=48):
     """ 
@@ -304,8 +307,7 @@ def deploy(vpc, ngfw, awscfg):
                 network.modify_attribute(Groups=[vpc.security_group.id])
                            
     # Rename NGFW to AMI instance id (availability zone)
-    ngfw.engine.rename('{} ({})'.format(instance.id, vpc.availability_zone))
-    #ngfw.engine.reload() # Refresh engine cache                    
+    ngfw.rename('{} ({})'.format(instance.id, vpc.availability_zone))
     return ngfw
 
 def main():
@@ -322,8 +324,8 @@ def main():
     group.add_argument('-y', '--yaml', help='Specify yaml configuration file name')
     group.add_argument('configure', nargs='?', help='Initial configuration wizard')
     actions = parser.add_mutually_exclusive_group()
-    actions.add_argument('-d', '--delete', action='store_true', help='Delete a VPC (menu)')
-    actions.add_argument('-c', '--create', action='store_true', help='Create a VPC with NGFW')
+    actions.add_argument('--delete_vpc', action='store_true', help='Delete a VPC (menu)')
+    actions.add_argument('--create_vpc', action='store_true', help='Create a VPC with NGFW')
     actions.add_argument('-r', '--remove', action='store_true', help='Remove NGFW from VPC (menu)')
     actions.add_argument('-a', '--add', action='store_true', help='Add NGFW to existing VPC (menu)')
     actions.add_argument('-l', '--list', action='store_true', help='List NGFW installed in VPC (menu)')
@@ -437,12 +439,15 @@ def main():
             print('No unused subnets available.')
         return
     
-    if args.delete:
+    if args.delete_vpc:
         selection = select_delete_vpc()
         vpc = VpcConfiguration(selection).load()
-        vpc.rollback()
+        try:
+            rollback(vpc.vpc)
+        except VpcConfigurationError as e:
+            logger.error(e)
 
-    if args.create:
+    if args.create_vpc:
         validate_aws(awscfg, vpc_create=True)
         start_time = time.time()
         results = create_vpc_and_ngfw(awscfg, ngfw)

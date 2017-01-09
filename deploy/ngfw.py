@@ -9,11 +9,9 @@ from smc.api.configloader import transform_login
 from smc.elements.helpers import location_helper
 from smc.vpn.policy import VPNPolicy
 from smc.core.engines import Layer3Firewall
-from smc.api.exceptions import TaskRunFailed, LicenseError,\
-    LoadEngineFailed, ElementNotFound, MissingRequiredInput
+from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput
 from smc.administration.tasks import Task
-from smc.actions.search import element_by_href_as_json, element_name_by_href  
-from smc.core.engine import Engine
+from smc.actions.search import element_by_href_as_json
 from smc.elements.collection import describe_vpn, describe_fw_policy,\
     describe_single_fw, describe_mgt_server, describe_log_server
 from smc.elements.other import prepare_contact_address
@@ -74,8 +72,6 @@ class NGFWConfiguration(object):
                                                                     network_value)
    
         logger.info('Created NGFW successfully')
-
-        #self.engine = engine.reload()
         self.engine = engine
         # Enable VPN on external interface if policy provided
         if self.vpn:
@@ -98,6 +94,13 @@ class NGFWConfiguration(object):
         clone.__dict__.update(self.__dict__)
         clone.network_interface = []
         return clone
+    
+    def rename(self, name):
+        """
+        Rename NGFW to instance_id (availability zone)
+        """
+        self.name = name
+        self.engine.rename(name)
         
     def upload_policy(self):
         """
@@ -208,41 +211,7 @@ class NGFWConfiguration(object):
                 else:
                     yield []
             yield None
-                      
-    def rollback(self):
-        """
-        Rollback the engine, remove from VPN Policy if it's assigned
-        """
-        try:
-            engine = Engine(self.name).load()
-            if self.vpn_policy: #If a policy was specified
-                vpn = VPNPolicy(self.vpn_policy)
-                vpn.open()
-                for gw in vpn.central_gateway_node.all():
-                    if gw.name.startswith(self.name):
-                        gw.delete()
-                vpn.save()
-                vpn.close()
-            # If contact address exists, remove it
-            location_ref = engine.json.get('location_ref')
-            if element_name_by_href(location_ref) != 'Default':
-                logger.info('Deleting custom fw location: {}'.format(location_ref))
-                mgt = describe_mgt_server()
-                for server in mgt:
-                    server.remove_contact_address(location_ref)
-                log = describe_log_server()
-                for server in log:
-                    server.remove_contact_address(location_ref)
-            result = engine.delete()
-            if not result.msg:
-                logger.info('NGFW deleted successfully')
-            else:
-                logger.error('Failed deleting NGFW: %s', result.msg)
-        except LoadEngineFailed as e:
-            logger.info('Failed loading engine, engine may not exist: %s', e)
-        except ElementNotFound as e:
-            logger.error('Failed finding VPN Policy: %s', e)
-    
+                       
 def del_fw_from_smc(instance_ids):
     """
     FW name is 'instance_id (availability zone). To do proper cleanup,
@@ -251,17 +220,6 @@ def del_fw_from_smc(instance_ids):
     :param list instance_ids: string of instance ids
     :return: None
     """
-    '''
-    for policyvpn in describe_vpn():
-        policyvpn.open()
-        for gw in policyvpn.central_gateway_node.all():
-            if gw.name.startswith(engine.name):
-                print("Delete: %s" % gw.name)
-                gw.delete()
-                policyvpn.save()
-        policyvpn.close()
-    '''
-    #TODO: Remove from VPN policy, get reference???
     firewalls = describe_single_fw() # FW List
     for instance in instance_ids:
         for fw in firewalls:
@@ -275,11 +233,34 @@ def del_fw_from_smc(instance_ids):
                 log = describe_log_server()
                 for server in log:
                     server.remove_contact_address(location_ref)
+                del_from_smc_vpn_policy(fw.name)
                 response = fw.delete()
                 if response.msg:
                     logger.error('Could not delete fw: {}, {}'
                                  .format(fw.name, response.msg))
-                    
+                else:
+                    logger.info("Successfully removed NGFW.")
+
+def del_from_smc_vpn_policy(name):
+    # Temporary solution - SMC API (6.1.1) does not expose the associated
+    # VPN policies on the engine so we need to iterate each VPN policy and
+    # look for our engine
+    for policyvpn in describe_vpn():
+        policyvpn.open()
+        for gw in policyvpn.central_gateway_node.all():
+            if gw.name.startswith(name):
+                gw.delete()
+                policyvpn.save()
+                policyvpn.close()
+                return
+        for gw in policyvpn.satellite_gateway_node.all():
+            if gw.name.startswith(name):
+                gw.delete()
+                policyvpn.save()
+                policyvpn.close()
+                return
+        policyvpn.close()
+
 def obtain_vpnpolicy(vpn_policy=None):
     """
     Return available VPN policies

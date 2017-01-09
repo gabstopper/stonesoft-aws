@@ -55,8 +55,8 @@ positional arguments:
 optional arguments:
   -h, --help            show this help message and exit
   -y YAML, --yaml YAML  Specify yaml configuration file name
-  -d, --delete          Delete a VPC (menu)
-  -c, --create          Create a VPC with NGFW
+  -d, --delete_vpc      Delete a VPC (menu)
+  -c, --create_vpc      Create a VPC with NGFW
   -r, --remove          Remove NGFW from VPC (menu)
   -a, --add             Add NGFW to existing VPC (menu)
   -l, --list            List NGFW installed in VPC (menu)
@@ -93,13 +93,13 @@ ngfw_launcher.py -y /path/to/config.yml --list
 Delete a VPC created using this tool:
 
 ```
-ngfw_launcher.py -y /path/to/config.yml --delete
+ngfw_launcher.py -y /path/to/config.yml --delete_vpc
 ```
 
 Create a new VPC with NGFW. Note, this requires vpc_subnet, vpc_private and vpc_public settings in
 the yaml configuration:
 
 ```
-ngfw_launcher.py -y /path/to/config.yml --create --verbose
+ngfw_launcher.py -y /path/to/config.yml --create_vpc --verbose
 ```
 

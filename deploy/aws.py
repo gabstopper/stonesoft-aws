@@ -15,6 +15,9 @@ ec2 = None
 
 logger = logging.getLogger(__name__)
 
+class VpcConfigurationError(Exception):
+    pass
+
 class VpcConfiguration(object):
     """ 
     VpcConfiguration models the data to correlate certain aspects of an 
@@ -86,6 +89,7 @@ class VpcConfiguration(object):
         logger.info('Created VPC: {}'.format(vpc_new.vpc_id))
         
         aws = VpcConfiguration(vpc_new.vpc_id).load()
+        aws.vpc.create_tags(Tags=create_tag())
         
         internet_gateway = ec2.create_internet_gateway()
         
@@ -325,78 +329,6 @@ class VpcConfiguration(object):
                                         NetworkInterfaces=interfaces,
                                         UserData=userdata)
         return instance[0]
-        
-    def rollback(self):
-        """ 
-        In case of failure, convenience to wrap in try/except and remove
-        the VPC. If there is a running EC2 instance, this will terminate
-        that instance, remove all other dependencies and delete the VPC.
-        Typically this is best run when attempting to create the entire
-        VPC.
-        """
-        for instance in self.vpc.instances.filter(Filters=[{
-                                    'Name': 'instance-state-name',
-                                    'Values': ['running', 'pending', 'stopped']}]):
-            logger.info("Terminating instance: {}".format(instance.instance_id))
-            instance.terminate()
-            waiter = ec2.meta.client.get_waiter('instance_terminated')
-            waiter.wait(InstanceIds=[instance.id])
-        # Network interfaces
-        for intf in self.vpc.network_interfaces.all():
-            intf.delete()
-        # Subnets
-        for subnet in self.vpc.subnets.all():
-            subnet.delete()
-        # Dump route tables
-        for rt in self.vpc.route_tables.all():
-            if not rt.associations_attribute:
-                rt.delete()
-            else:
-                for current in rt.associations_attribute:
-                    if not current or current.get('Main') is False:
-                        rt.delete()
-        # Internet gateway
-        for igw in self.vpc.internet_gateways.all():
-            igw.detach_from_vpc(VpcId=self.vpc.vpc_id)
-            igw.delete()
-        # Delete security group
-        try:
-            grp = list(self.vpc.security_groups.filter(Filters=[{
-                                                    'Name': 'group-name',
-                                                    'Values': ['stonesoft-sg']}]))
-            if grp:
-                grp[0].delete()
-        except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'InvalidGroup.NotFound':
-                pass
-            else: raise
-        self.vpc.delete()
-        logger.info("Deleted vpc: {}".format(self.vpc.vpc_id))
-
-def rollback_existing_vpc(vpc, subnets):
-    """
-    If a failure occurs during injection into AWS VPC, 
-    reverse the changes back to original
-    
-    :param VPCConfiguration vpc: VPCConfiguration instance
-    :param list ec2.Subnet subnets: subnets for this VPC
-    """
-    subnet_ids = [subnet.id for subnet in subnets]
-    for rt in list_tagged_rtables(vpc.vpc):
-        if rt.associations:
-            for assoc in rt.associations.all(): 
-                if assoc.subnet_id in subnet_ids:
-                    logger.info('Removing route tbl assoc: {} for subnet: {}'
-                                .format(assoc.route_table_id, assoc.subnet_id))
-                    assoc.delete()
-                    rt.delete()
-
-    for intf in vpc.network_interface:
-        for _, interface in intf.items():
-            interface.delete()
-                
-    if vpc.public_subnet:
-        vpc.public_subnet.delete()
 
 def authorize_security_group_ingress(security_group, from_cidr_block, 
                                      ip_protocol='-1'):
@@ -705,7 +637,7 @@ def next_available_subnet(az_subnets=None, vpc_cidr=None):
     
 def remove_ngfw_from_vpc(instances):
     """
-    Instances should all be in the same VPC. 
+    Remove only Stonesoft NGFW and related elements.
     Tags are used on subnets, route tables and instances to find stonesoft
     related components and stop in the right order. When route tables are 
     removed, existing subnets will revert to using the Main route table.
@@ -776,6 +708,93 @@ def remove_ngfw_from_vpc(instances):
     del_fw_from_smc(instance_ids)
     
     logger.info('Completed successfully.')  
+
+def rollback(vpc):
+    """ 
+    In case of failure, convenience to wrap in try/except and remove
+    the VPC. If there is a running EC2 instance, this will terminate
+    that instance, remove all other dependencies and delete the VPC.
+    This will only rollback a VPC that has the stonesoft tag.
+    
+    :param ec2.Vpc vpc: vpc reference
+    """
+    try:
+        if vpc.tags:
+            has_tag = any(tag for tag in vpc.tags if tag.get('Key') == 'stonesoft')
+            if not has_tag:
+                raise VpcConfigurationError
+        else:
+            raise VpcConfigurationError 
+    except VpcConfigurationError:
+        raise VpcConfigurationError('Stonesoft tag not found, cannot delete VPC.')
+             
+    instance_ids = []
+    for instance in vpc.instances.filter(Filters=[{
+                                'Name': 'instance-state-name',
+                                'Values': ['running', 'pending', 'stopped']}]):
+        logger.info("Terminating instance: {}".format(instance.instance_id))
+        instance_ids.append(instance.instance_id)
+        instance.terminate()
+        waiter = ec2.meta.client.get_waiter('instance_terminated')
+        waiter.wait(InstanceIds=[instance.id])
+    # Network interfaces
+    for intf in vpc.network_interfaces.all():
+        intf.delete()
+    # Subnets
+    for subnet in vpc.subnets.all():
+        subnet.delete()
+    # Dump route tables
+    for rt in vpc.route_tables.all():
+        if not rt.associations_attribute:
+            rt.delete()
+        else:
+            for current in rt.associations_attribute:
+                if not current or current.get('Main') is False:
+                    rt.delete()
+    # Internet gateway
+    for igw in vpc.internet_gateways.all():
+        igw.detach_from_vpc(VpcId=vpc.vpc_id)
+        igw.delete()
+    # Delete security group
+    try:
+        grp = list(vpc.security_groups.filter(Filters=[{
+                                                'Name': 'group-name',
+                                                'Values': ['stonesoft-sg']}]))
+        if grp:
+            grp[0].delete()
+    except botocore.exceptions.ClientError as e:
+        if e.response['Error']['Code'] == 'InvalidGroup.NotFound':
+            pass
+        else: raise
+
+    vpc.delete()
+    logger.info("Deleted vpc: {}".format(vpc.vpc_id))
+    del_fw_from_smc(instance_ids)
+
+def rollback_existing_vpc(vpc, subnets):
+    """
+    If a failure occurs during injection into AWS VPC, 
+    reverse the changes back to original
+    
+    :param VPCConfiguration vpc: VPCConfiguration instance
+    :param list ec2.Subnet subnets: subnets for this VPC
+    """
+    subnet_ids = [subnet.id for subnet in subnets]
+    for rt in list_tagged_rtables(vpc.vpc):
+        if rt.associations:
+            for assoc in rt.associations.all(): 
+                if assoc.subnet_id in subnet_ids:
+                    logger.info('Removing route tbl assoc: {} for subnet: {}'
+                                .format(assoc.route_table_id, assoc.subnet_id))
+                    assoc.delete()
+                    rt.delete()
+
+    for intf in vpc.network_interface:
+        for _, interface in intf.items():
+            interface.delete()
+                
+    if vpc.public_subnet:
+        vpc.public_subnet.delete()
 
 def validate_aws(awscfg, vpc_create=False):
     """
