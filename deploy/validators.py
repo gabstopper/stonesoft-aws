@@ -1,3 +1,4 @@
+import sys
 import ipaddress
 import yaml
 from deploy.ngfw import get_smc_session
@@ -35,8 +36,14 @@ class IPSubnetValidator(Validator):
         self.field_name = field_name
         
     def validate(self, data):
-        try:
-            ipaddress.IPv4Network(data)
+        try: 
+            if len(data.split('/')) != 2:
+                raise ValueError('Invalid CIDR syntax')
+            # need to be unicode for py27
+            if sys.version_info > (3,):
+                ipaddress.IPv4Network(data)
+            else:
+                ipaddress.IPv4Network(u'{}'.format(data))
         except (ValueError, ipaddress.AddressValueError) as e:
             raise ValidationError(e)
         return {self.field_name: data}
@@ -47,17 +54,14 @@ class DefaultValidator(Validator):
         self.default_val = default_val
   
     def validate(self, data):
-        if not isinstance(data, str) or len(data) == 0:
+        if len(data) == 0:
             data = self.default_val
-        elif isinstance(self.default_val, bool):
-            if data.lower() == 'true':
-                data = True
-            elif data.lower() == 'false':
-                data = False
-            else:
-                data = self.default_val
+        if data.lower().startswith('yes'):
+            data = True
+        elif data.lower().startswith('no'):
+            data = False
         return {self.field_name: data}
-
+        
 class ChoiceValidator(Validator):
     def __init__(self, field_name):
         self.field_name = field_name
@@ -101,10 +105,10 @@ def prompt(opt):
                         return validate.validate(value)
                     
         except (ValidationError) as e:
-            print("Invalid choice: %s" % e)
+            print('Invalid choice. {}'.format(e.message))
 
 def write_cfg_to_yml(data, path=None):
-    """ Writing collected data to yml """
+    # Write out yml
     with open(path, 'w') as yaml_file:
         yaml.safe_dump(data, yaml_file, default_flow_style=False)
     print('Wrote ngfw-deploy.yml to dir %s' % path)
@@ -144,20 +148,20 @@ def prompt_user(path=None):
     suite.add_validator(DefaultValidator('smc_address', ''))
     suite.add_validator(RequiredValidator('smc_apikey'))
     suite.add_validator(DefaultValidator('smc_port', '8082'))
-    suite.add_validator(DefaultValidator('smc_ssl', False))
-    suite.add_validator(DefaultValidator('verify_ssl', False))
+    suite.add_validator(DefaultValidator('smc_ssl', 'Yes'))
+    suite.add_validator(DefaultValidator('verify_ssl', 'Yes'))
     suite.add_validator(RequiredValidator('ssl_cert_file'))
     suite.add_validator(DefaultValidator('dns', '8.8.8.8'))
-    suite.add_validator(DefaultValidator('default_nat', True))
-    suite.add_validator(DefaultValidator('antivirus', False))
-    suite.add_validator(DefaultValidator('gti', False))
-    suite.add_validator(DefaultValidator('vpn', False))
+    suite.add_validator(DefaultValidator('default_nat', 'Yes'))
+    suite.add_validator(DefaultValidator('antivirus', 'No'))
+    suite.add_validator(DefaultValidator('gti', 'No'))
+    suite.add_validator(DefaultValidator('vpn', 'No'))
     suite.add_validator(ChoiceValidator('firewall_policy'))
     suite.add_validator(ChoiceValidator('vpn_policy'))
     suite.add_validator(DefaultValidator('vpn_role', 'central'))
     suite.add_validator(DefaultValidator('vpn_networks', ''))
     suite.add_validator(DefaultValidator('nat_address', ''))
-    suite.add_validator(DefaultValidator('vpc', False))
+    suite.add_validator(DefaultValidator('vpc', 'No'))
     suite.add_validator(IPSubnetValidator('vpc_subnet'))
     suite.add_validator(IPSubnetValidator('vpc_private'))
     suite.add_validator(IPSubnetValidator('vpc_public'))
@@ -167,7 +171,7 @@ def prompt_user(path=None):
     suite.add_validator(RequiredValidator('aws_keypair'))
     suite.add_validator(RequiredValidator('ngfw_ami'))
     suite.add_validator(DefaultValidator('aws_instance_type', 't2.micro'))
-    suite.add_validator(DefaultValidator('aws_client', False))
+    suite.add_validator(DefaultValidator('aws_client', 'No'))
     suite.add_validator(RequiredValidator('aws_client_ami'))
     suite.add_validator(DefaultValidator('path', '{}/ngfw-deploy.yml'.format(expanduser("~"))))
     
@@ -196,7 +200,7 @@ def prompt_user(path=None):
             break
         except SMCConnectionError as e:
             print('Failed connecting to SMC: {}'.format(e))
-        
+  
     fw={}
     for opt in FW:
         fw.update(prompt(opt))
@@ -206,8 +210,10 @@ def prompt_user(path=None):
             vpn_sub.update(prompt(opt))
         if vpn_sub.get('vpn_networks'):
             vpn_sub.update(vpn_networks=vpn_sub.get('vpn_networks').split(','))
+        fw.update(vpn=vpn_sub)
+    else:
+        fw.pop('vpn', None)
     fw.update(dns=fw.get('dns').split(','))
-    fw.update(vpn=vpn_sub)
     data.update({'NGFW': fw})
 
     aws = {}
@@ -219,24 +225,26 @@ def prompt_user(path=None):
         if aws.get('aws_access_key_id'):
             continue
         break
-    
+    if not aws.get('aws_access_key_id'):
+        aws.pop('aws_access_key_id', None)
+        
     print(AWS_REQ_BANNER)
     for opt in AWS_REQ:
         aws.update(prompt(opt))
         
     print(AWS_OPT_BANNER)
     for opt in AWS_OPT_ASK:
+        print(opt)
         if prompt(opt).get('vpc'):
             for opt in AWS_OPT:
                 aws.update(prompt(opt))
             if aws.get('aws_client'):
                 for opt in AWS_CLIENT:
                     aws.update(prompt(opt))
-    
-    if not aws.get('aws_access_key_id'):
-        aws.pop('aws_access_key_id', None)   
-    data.update({'AWS': aws})
+            aws.pop('aws_client')
 
+    data.update({'AWS': aws})
+   
     path = prompt(FILE_PATH[0]).get('path')
     write_cfg_to_yml(data, path)
     return path

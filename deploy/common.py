@@ -72,6 +72,6 @@ def smc_creds():
     for opt in SMC_CREDS:
         yield opt
 
-AWS_CLIENT = [fields('Enter AWS client AMI', 'aws_client_ami')]
+AWS_CLIENT = [fields('Enter AWS client AMI (required)', 'aws_client_ami')]
 
 FILE_PATH = [fields('Location for yaml file', 'path')]

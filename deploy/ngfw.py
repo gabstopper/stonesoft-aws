@@ -13,8 +13,11 @@ from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput
 from smc.administration.tasks import Task
 from smc.actions.search import element_by_href_as_json
 from smc.elements.collection import describe_vpn, describe_fw_policy,\
-    describe_single_fw, describe_mgt_server, describe_log_server
+    describe_single_fw, describe_mgt_server, describe_log_server,\
+    describe_tcp_service, describe_alias, describe_host
 from smc.elements.other import prepare_contact_address
+from smc.elements.service import TCPService
+from smc.policy.layer3 import FirewallPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,7 @@ class NGFWConfiguration(object):
                  firewall_policy=None, vpn=None,
                  reverse_connection=False, nat_address=None,
                  **kwargs):
-        self.engine = None
+        self.engine = None #smc.core.engine.Engine
         self.dns = dns if dns else []
         self.default_nat = default_nat
         self.antivirus = antivirus
@@ -35,6 +38,7 @@ class NGFWConfiguration(object):
         self.vpn = vpn
         self.firewall_policy = firewall_policy
         self.reverse_connection = reverse_connection
+        self.aws_ami_ip = None #IP used for client AMI rules
         # Unique temporary name
         uid = uuid.uuid4()
         self.name = uid.hex
@@ -115,6 +119,41 @@ class NGFWConfiguration(object):
         except TaskRunFailed as e:
             logger.error(e)
     
+    def add_policy(self):
+        """
+        If a client AMI was specified when building a new VPC, this will add
+        rules to allow inbound access to the AMI. This could be extended to 
+        more generically support VPN rules.
+        """
+        if self.aws_ami_ip:
+            services = describe_tcp_service(name='2222')
+            if not services:
+                TCPService.create('ssh_2222', 2222)
+            service = (TCPService('ssh_2222'))
+            
+            alias = describe_alias(name='$$ Interface ID 0.ip')
+            
+            # Create
+            f = FirewallPolicy(self.firewall_policy)
+            f.fw_ipv4_access_rules.create(name=self.engine.name, 
+                                          sources='any', 
+                                          destinations=[alias[0].href], 
+                                          services=[service.href], 
+                                          action='allow')
+            
+            f.fw_ipv4_nat_rules.create(name=self.engine.name, 
+                                       sources='any', 
+                                       destinations=[alias[0].href], 
+                                       services=[service.href], 
+                                       static_dst_nat={'original_value': {
+                                                                'max_port':2222,
+                                                                'min_port':2222},
+                                                       'translated_value': {
+                                                                'ip_descriptor': self.aws_ami_ip,
+                                                                'max_port':22,
+                                                                'min_port':22}}, 
+                                       )
+    
     def add_location(self, location_name):
         """
         Create a unique Location for the AWS Firewall if the NAT address is set.
@@ -123,7 +162,6 @@ class NGFWConfiguration(object):
         
         :return: str of location or None
         """
-        #TODO: If vpn policy isnt required, use a common NAT element?
         if self.nat_address: #SMC behind NAT
             # Add to management server
             mgt = describe_mgt_server()
@@ -234,6 +272,12 @@ def del_fw_from_smc(instance_ids):
                 for server in log:
                     server.remove_contact_address(location_ref)
                 del_from_smc_vpn_policy(fw.name)
+                # Quick search to delete rules
+                policy = fw.nodes[0].status().installed_policy
+                f = FirewallPolicy(policy)
+                search = f.search_rule(fw.name)
+                for rules in search:
+                    rules.delete()
                 response = fw.delete()
                 if response.msg:
                     logger.error('Could not delete fw: {}, {}'

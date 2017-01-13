@@ -109,13 +109,13 @@ def create_vpc_and_ngfw(awscfg, ngfw):
         vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
         authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
         
+        # If user wants a client AMI, launch in the background
+        if awscfg.aws_client_ami:
+            logger.info('Launching client AMI with id: {}'.format(awscfg.aws_client_ami))
+            ngfw.aws_ami_ip = spin_up_host(awscfg.aws_keypair, vpc, awscfg.aws_client_ami)
+    
         ngfw_init = deploy(vpc, ngfw, awscfg)
         return task_runner(ngfw_init)
-            
-        # If user wants a client AMI, launch in the background
-        if awscfg.aws_client and awscfg.aws_client_ami:
-            spin_up_host(awscfg.aws_keypair, vpc, awscfg.aws_instance_type, 
-                         awscfg.aws_client_ami)
         
     except (botocore.exceptions.ClientError, CreateEngineFailed,
             NodeCommandFailed) as e:
@@ -186,7 +186,6 @@ def create_inline_ngfw(subnets, public, awscfg, ngfw, queue):
         logger.error('Caught exception, rolling back: {}'.format(e))
         queue.put(('{}, {}:'.format(subnets[0].availability_zone, subnets), [str(e)]))
         rollback_existing_vpc(vpc, subnets)
-        print("Deleting FW: %s" % ngfw.name)
         del_fw_from_smc([ngfw.name])
 
 def create_as_nat_gateway(subnets, public, awscfg, ngfw, queue):
@@ -308,6 +307,7 @@ def deploy(vpc, ngfw, awscfg):
                            
     # Rename NGFW to AMI instance id (availability zone)
     ngfw.rename('{} ({})'.format(instance.id, vpc.availability_zone))
+    ngfw.add_policy()
     return ngfw
 
 def main():

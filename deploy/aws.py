@@ -401,8 +401,8 @@ def wait_for_resource(resource, iterable):
                 return
             time.sleep(2)
    
-def spin_up_host(key_pair, vpc, instance_type='t2.micro',
-                 aws_client_ami='ami-2d39803a'):
+def spin_up_host(key_pair, vpc, aws_client_ami,
+                 instance_type='t2.micro'):
     """
     Create an internal amazon host on private subnet for testing
     Use ubuntu AMI by default
@@ -422,6 +422,7 @@ def spin_up_host(key_pair, vpc, instance_type='t2.micro',
         ntwk = data.get('PrivateIpAddress')
     logger.info('Client instance created: {} with keypair: {} at ipaddress: {}'
                 .format(instance.id, instance.key_name, ntwk))
+    return ntwk
 
 def map_az_to_subnet(subnets):
     """
@@ -516,8 +517,6 @@ def installed_as_list_view(vpc):
         instance_id = instance.id
         azone = instance.subnet.availability_zone
         
-        for intf in instance.network_interfaces:
-            print(intf.id, intf.private_ip_address, intf.subnet_id)   
         dt = '{:{dfmt} {tfmt}}'.format(instance.launch_time, dfmt='%Y-%m-%d', tfmt='%H:%M %Z')
         instances.append((instance_id, azone, instance.instance_type,
                           instance.state.get('Name'), dt))
@@ -735,8 +734,8 @@ def rollback(vpc):
         logger.info("Terminating instance: {}".format(instance.instance_id))
         instance_ids.append(instance.instance_id)
         instance.terminate()
-        waiter = ec2.meta.client.get_waiter('instance_terminated')
-        waiter.wait(InstanceIds=[instance.id])
+    waiter = ec2.meta.client.get_waiter('instance_terminated')
+    waiter.wait(InstanceIds=instance_ids)
     # Network interfaces
     for intf in vpc.network_interfaces.all():
         intf.delete()
@@ -818,25 +817,27 @@ def validate_aws(awscfg, vpc_create=False):
             missing.append('vpc_private')
         if not awscfg.vpc_public:
             missing.append('vpc_public')
+        if awscfg.aws_client_ami:
+            ec2.meta.client.describe_images(ImageIds=[awscfg.aws_client_ami])    
         if missing:
             raise MissingRequiredInput('Missing required settings in configuration: {}'
                                        .format(missing))
     
 aws = namedtuple('aws', 'aws_keypair ngfw_ami aws_access_key_id aws_secret_access_key\
-                         aws_client vpc_public vpc_private vpc_subnet aws_instance_type\
+                         aws_client_ami vpc_public vpc_private vpc_subnet aws_instance_type\
                          aws_region')
 
 def AWSConfig(aws_keypair, ngfw_ami, 
               aws_access_key_id=None, 
               aws_secret_access_key=None,
-              aws_client=False, 
+              aws_client_ami=None, 
               vpc_public=None, 
               vpc_private=None, 
               vpc_subnet=None,
               aws_instance_type='t2.micro', 
               aws_region=None, **kwargs):
     return aws(aws_keypair, ngfw_ami, aws_access_key_id, aws_secret_access_key,
-               aws_client, vpc_public, vpc_private, vpc_subnet, aws_instance_type, aws_region)
+               aws_client_ami, vpc_public, vpc_private, vpc_subnet, aws_instance_type, aws_region)
 
 def get_ec2_client(awscfg, prompt_for_region=False):
     """
