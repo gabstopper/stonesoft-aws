@@ -1,3 +1,5 @@
+[![Documentation Status](https://readthedocs.org/projects/stonesoft-aws/badge/?version=latest)](http://stonesoft-aws.readthedocs.io/en/latest/?badge=latest)
+
 ###Deploy Stonesoft NGFW into AWS
 
 Python based tool to auto-deploy Stonesoft NGFW into Amazon Web Services.
