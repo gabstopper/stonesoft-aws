@@ -14,7 +14,7 @@ from smc.administration.tasks import Task
 from smc.actions.search import element_by_href_as_json
 from smc.elements.collection import describe_vpn, describe_fw_policy,\
     describe_single_fw, describe_mgt_server, describe_log_server,\
-    describe_tcp_service, describe_alias, describe_host
+    describe_tcp_service, describe_alias
 from smc.elements.other import prepare_contact_address
 from smc.elements.service import TCPService
 from smc.policy.layer3 import FirewallPolicy
@@ -263,7 +263,6 @@ def del_fw_from_smc(instance_ids):
         for fw in firewalls:
             if fw.name.startswith(instance):
                 # Remove Locations from mgmt / log server
-                fw.load()
                 location_ref = fw.get_attr_by_name('location_ref')
                 mgt = describe_mgt_server()
                 for server in mgt:
@@ -274,10 +273,11 @@ def del_fw_from_smc(instance_ids):
                 del_from_smc_vpn_policy(fw.name)
                 # Quick search to delete rules
                 policy = fw.nodes[0].status().installed_policy
-                f = FirewallPolicy(policy)
-                search = f.search_rule(fw.name)
-                for rules in search:
-                    rules.delete()
+                if policy: # It's been installed
+                    f = FirewallPolicy(policy)
+                    search = f.search_rule(fw.name)
+                    for rules in search:
+                        rules.delete()
                 response = fw.delete()
                 if response.msg:
                     logger.error('Could not delete fw: {}, {}'

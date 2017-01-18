@@ -121,6 +121,8 @@ def create_vpc_and_ngfw(awscfg, ngfw):
             NodeCommandFailed) as e:
         logger.error('Caught exception, rolling back: {}'.format(e))
         rollback(vpc.vpc)
+        if ngfw.engine:
+            del_fw_from_smc([ngfw.name])
         return [('Failed deploying VPC', [str(e)])]
 
 def create_inline_ngfw(subnets, public, awscfg, ngfw, queue):
@@ -186,7 +188,8 @@ def create_inline_ngfw(subnets, public, awscfg, ngfw, queue):
         logger.error('Caught exception, rolling back: {}'.format(e))
         queue.put(('{}, {}:'.format(subnets[0].availability_zone, subnets), [str(e)]))
         rollback_existing_vpc(vpc, subnets)
-        del_fw_from_smc([ngfw.name])
+        if ngfw.engine:
+            del_fw_from_smc([ngfw.name])
 
 def create_as_nat_gateway(subnets, public, awscfg, ngfw, queue):
     
@@ -217,8 +220,8 @@ def create_as_nat_gateway(subnets, public, awscfg, ngfw, queue):
         logger.error('Caught exception, rolling back: {}'.format(e))
         queue.put(('{}, {}:'.format(subnets[0].availability_zone, subnets), [str(e)]))
         rollback_existing_vpc(vpc, subnets)
-        print("Deleting FW: %s" % ngfw.name)
-        del_fw_from_smc([ngfw.name])
+        if ngfw.engine:
+            del_fw_from_smc([ngfw.name])
                 
 def task_runner(ngfw, queue=None, sleep=5, duration=48):
     """ 
@@ -318,6 +321,7 @@ def main():
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     
+    from deploy import __version__
     import argparse
     parser = argparse.ArgumentParser(description='Stonesoft NGFW AWS Launcher')
     group = parser.add_mutually_exclusive_group(required=True)
@@ -330,6 +334,8 @@ def main():
     actions.add_argument('-a', '--add', action='store_true', help='Add NGFW to existing VPC (menu)')
     actions.add_argument('-l', '--list', action='store_true', help='List NGFW installed in VPC (menu)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
+    parser.add_argument('--version', action='version',
+                        version='%(prog)s {version}'.format(version=__version__))
     
     args = parser.parse_args()
     
