@@ -14,10 +14,11 @@ from smc.administration.tasks import Task
 from smc.actions.search import element_by_href_as_json
 from smc.elements.collection import describe_vpn, describe_fw_policy,\
     describe_single_fw, describe_mgt_server, describe_log_server,\
-    describe_tcp_service, describe_alias
+    describe_tcp_service, describe_alias 
 from smc.elements.other import prepare_contact_address
 from smc.elements.service import TCPService
 from smc.policy.layer3 import FirewallPolicy
+from smc.api.common import SMCRequest
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,22 @@ class NGFWConfiguration(object):
         more generically support VPN rules.
         """
         if self.aws_ami_ip:
+            policy = FirewallPolicy(self.firewall_policy)
+            for rule in policy.fw_ipv4_nat_rules.all():
+                if rule.name == 'aws_client':
+                    orig = rule.describe()
+                    nat = orig['options']['static_dst_nat']
+                    nat['translated_value']['ip_descriptor'] = self.aws_ami_ip
+                    result = SMCRequest(json=orig,
+                                        href=rule.href,
+                                        etag=rule.etag).update()
+                    if result.msg:
+                        logger.error('Error modifying NAT rule: {}'.format(result.msg))
+                    else:
+                        logger.info('Success creating NAT rule for AMI client using address: {}'
+                                    .format(self.aws_ami_ip))
+        
+            '''
             services = describe_tcp_service(name='2222')
             if not services:
                 TCPService.create('ssh_2222', 2222)
@@ -153,6 +170,7 @@ class NGFWConfiguration(object):
                                                                 'max_port':22,
                                                                 'min_port':22}}, 
                                        )
+            '''
     
     def add_location(self, location_name):
         """
