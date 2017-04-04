@@ -17,7 +17,10 @@ NGFW:
   firewall_policy: Layer 3 Virtual FW Policy
   gti: true
   nat_address: 74.1.1.1
-  vpn_policy: central
+  vpn:
+    vpn_networks: ''
+    vpn_policy: Amazon AWS
+    vpn_role: central
 SMC:
   smc_address: 172.18.1.1xx
   smc_apikey: xxxxxxxxxxxxxxxxxxxxxx

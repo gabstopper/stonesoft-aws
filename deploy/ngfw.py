@@ -13,7 +13,6 @@ from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput
 from smc.administration.tasks import Task
 from smc.actions.search import element_by_href_as_json, element_name_by_href
 from smc.policy.layer3 import FirewallPolicy
-from smc.api.common import SMCRequest
 from smc.core.contact_address import ContactAddress
 from smc.elements.servers import ManagementServer, LogServer
 from smc.elements.resources import Search
