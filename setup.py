@@ -24,7 +24,7 @@ setup(name='stonesoft-aws',
                 'ngfw_launcher=deploy.__main__:main'
         ]
       },
-      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python=master'],
+      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python'],
       classifiers=[
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3.4",
