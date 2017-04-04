@@ -11,14 +11,14 @@ from smc.vpn.policy import VPNPolicy
 from smc.core.engines import Layer3Firewall
 from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput
 from smc.administration.tasks import Task
-from smc.actions.search import element_by_href_as_json
-from smc.elements.collection import describe_vpn, describe_fw_policy,\
-    describe_single_fw, describe_mgt_server, describe_log_server,\
-    describe_tcp_service, describe_alias 
-from smc.elements.other import prepare_contact_address
-from smc.elements.service import TCPService
+from smc.actions.search import element_by_href_as_json, element_name_by_href
 from smc.policy.layer3 import FirewallPolicy
 from smc.api.common import SMCRequest
+from smc.core.contact_address import ContactAddress
+from smc.elements.servers import ManagementServer, LogServer
+from smc.elements.resources import Search
+from smc.elements.service import TCPService
+from smc.elements.network import Alias
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +60,9 @@ class NGFWConfiguration(object):
             network_value = interface.get('network_value')
             if interface_id == 0:
                 mgmt_ip = address
-                mgmt_network = network_value
                 engine = Layer3Firewall.create(self.name, 
-                                               mgmt_ip, 
-                                               mgmt_network,
+                                               mgmt_ip=address, 
+                                               mgmt_network=network_value,
                                                domain_server_address=self.dns,
                                                reverse_connection=self.reverse_connection, 
                                                default_nat=self.default_nat,
@@ -72,28 +71,31 @@ class NGFWConfiguration(object):
                                                location_ref=location)
                 engine.add_route(default_gateway, '0.0.0.0/0')
             else:
-                engine.physical_interface.add_single_node_interface(interface_id, 
-                                                                    address, 
-                                                                    network_value)
+                engine.physical_interface.add_single_node_interface(interface_id=interface_id, 
+                                                                    address=address, 
+                                                                    network_value=network_value)
    
         logger.info('Created NGFW successfully')
         self.engine = engine
         # Enable VPN on external interface if policy provided
+        
         if self.vpn:
             try:
                 vpn_policy = self.vpn['vpn_policy']
-                for intf in engine.internal_gateway.internal_endpoint.all():
-                        if intf.name == mgmt_ip:
-                            intf.modify_attribute(enabled=True)
-                            intf.modify_attribute(nat_t=True)
+                for intf in self.engine.internal_gateway.internal_endpoint.all():
+                    if intf.name == mgmt_ip:
+                        intf.modify_attribute(enabled=True,
+                                              nat_t=True)
                     
                 role = self.vpn.get('vpn_role') if self.vpn.get('vpn_role') else 'central'
-                VPNPolicy.add_internal_gateway_to_vpn(engine.internal_gateway.href, 
-                                                      vpn_policy, 
-                                                      role)
+                VPNPolicy.add_internal_gateway_to_vpn(
+                    self.engine.internal_gateway.href, 
+                    vpn_policy, 
+                    role)
+        
             except KeyError:
                 pass
-            
+           
     def __copy__(self):
         clone = type(self)()
         clone.__dict__.update(self.__dict__)
@@ -127,51 +129,25 @@ class NGFWConfiguration(object):
         more generically support VPN rules.
         """
         if self.aws_ami_ip:
-            policy = FirewallPolicy(self.firewall_policy)
+            service = list(TCPService.objects.filter('2222'))
+            if not service:
+                service = TCPService.create(name='ssh2222', min_dst_port=2222)
+                
+            policy = FirewallPolicy('Layer 3 Virtual*')
+            found=False
             for rule in policy.fw_ipv4_nat_rules.all():
                 if rule.name == 'aws_client':
-                    orig = rule.describe()
-                    nat = orig['options']['static_dst_nat']
-                    nat['translated_value']['ip_descriptor'] = self.aws_ami_ip
-                    result = SMCRequest(json=orig,
-                                        href=rule.href,
-                                        etag=rule.etag).update()
-                    if result.msg:
-                        logger.error('Error modifying NAT rule: {}'.format(result.msg))
-                    else:
-                        logger.info('Success creating NAT rule for AMI client using address: {}'
-                                    .format(self.aws_ami_ip))
+                    rule.static_dst_nat.translated_value = self.aws_ami_ip
+                    rule.save()
+            if not found:
+                policy.fw_ipv4_nat_rules.create(name='aws_client', 
+                                                sources='any', 
+                                                destinations=[Alias('$$ Interface ID 0.ip')], 
+                                                services=service, 
+                                                static_dst_nat='1.1.1.1', 
+                                                static_dst_nat_ports=(2222, 22),
+                                                used_on=self.engine.href)
         
-            '''
-            services = describe_tcp_service(name='2222')
-            if not services:
-                TCPService.create('ssh_2222', 2222)
-            service = (TCPService('ssh_2222'))
-            
-            alias = describe_alias(name='$$ Interface ID 0.ip')
-            
-            # Create
-            f = FirewallPolicy(self.firewall_policy)
-            f.fw_ipv4_access_rules.create(name=self.engine.name, 
-                                          sources='any', 
-                                          destinations=[alias[0].href], 
-                                          services=[service.href], 
-                                          action='allow')
-            
-            f.fw_ipv4_nat_rules.create(name=self.engine.name, 
-                                       sources='any', 
-                                       destinations=[alias[0].href], 
-                                       services=[service.href], 
-                                       static_dst_nat={'original_value': {
-                                                                'max_port':2222,
-                                                                'min_port':2222},
-                                                       'translated_value': {
-                                                                'ip_descriptor': self.aws_ami_ip,
-                                                                'max_port':22,
-                                                                'min_port':22}}, 
-                                       )
-            '''
-    
     def add_location(self, location_name):
         """
         Create a unique Location for the AWS Firewall if the NAT address is set.
@@ -182,10 +158,10 @@ class NGFWConfiguration(object):
         """
         if self.nat_address: #SMC behind NAT
             # Add to management server
-            mgt = describe_mgt_server()
+            mgt = list(ManagementServer.objects.filter('Management*'))
             for server in mgt:
                 server.add_contact_address(self.nat_address, location_name)
-            log = describe_log_server()
+            log = list(LogServer.objects.filter('Log*'))
             for server in log:
                 server.add_contact_address(self.nat_address, location_name)
             return location_helper(location_name)
@@ -198,12 +174,10 @@ class NGFWConfiguration(object):
         
         :return: None
         """
-        for interface in self.engine.interface.all():
-            if interface.name == 'Interface 0':
-                contact_address = prepare_contact_address(elastic_ip, 
-                                                          location='Default')
-                interface.add_contact_address(contact_address,
-                                              self.engine.etag)
+        contact_addresses = self.engine.contact_addresses(0)
+        for interface in contact_addresses: #ContactInterface
+            contact_addr = ContactAddress.create(elastic_ip) #Default
+            interface.add_contact_address(contact_addr)
 
     def initial_contact(self):
         """
@@ -276,30 +250,31 @@ def del_fw_from_smc(instance_ids):
     :param list instance_ids: string of instance ids
     :return: None
     """
-    firewalls = describe_single_fw() # FW List
+    firewalls = list(Search('single_fw').objects.all())
     for instance in instance_ids:
         for fw in firewalls:
             if fw.name.startswith(instance):
                 # Remove Locations from mgmt / log server
-                location_ref = fw.get_attr_by_name('location_ref')
-                mgt = describe_mgt_server()
+                location_ref = fw.attr_by_name('location_ref')
+                location_name = element_name_by_href(location_ref)
+                mgt = list(ManagementServer.objects.filter('Management*'))
                 for server in mgt:
-                    server.remove_contact_address(location_ref)
-                log = describe_log_server()
+                    server.remove_contact_address(location_name)
+                log = list(LogServer.objects.filter('Log*'))
                 for server in log:
-                    server.remove_contact_address(location_ref)
+                    server.remove_contact_address(location_name)
                 del_from_smc_vpn_policy(fw.name)
                 # Quick search to delete rules
                 policy = fw.nodes[0].status().installed_policy
-                if policy: # It's been installed
-                    f = FirewallPolicy(policy)
-                    search = f.search_rule(fw.name)
-                    for rules in search:
-                        rules.delete()
-                response = fw.delete()
-                if response.msg:
-                    logger.error('Could not delete fw: {}, {}'
-                                 .format(fw.name, response.msg))
+                try:
+                    if policy: # It's been installed
+                        f = FirewallPolicy(policy)
+                        search = f.search_rule(fw.name)
+                        for rules in search:
+                            rules.delete()
+                    fw.delete()
+                except DeleteElementFailed as e:
+                    logger.error('Deleting element failed: %s' % e)
                 else:
                     logger.info("Successfully removed NGFW.")
 
@@ -307,7 +282,7 @@ def del_from_smc_vpn_policy(name):
     # Temporary solution - SMC API (6.1.1) does not expose the associated
     # VPN policies on the engine so we need to iterate each VPN policy and
     # look for our engine
-    for policyvpn in describe_vpn():
+    for policyvpn in list(Search('vpn').objects.all()):
         policyvpn.open()
         for gw in policyvpn.central_gateway_node.all():
             if gw.name.startswith(name):
@@ -329,7 +304,7 @@ def obtain_vpnpolicy(vpn_policy=None):
     
     :return: list available VPN Policies
     """
-    policy = [vpn.name for vpn in describe_vpn()]
+    policy = [vpn.name for vpn in list(Search('vpn').objects.all())]
     if vpn_policy is None:
         return policy
     else:
@@ -344,7 +319,7 @@ def obtain_fwpolicy(firewall_policy=None):
     
     :return: list available layer 3 firewall policies
     """
-    policy = [policy.name for policy in describe_fw_policy()]
+    policy = [policy.name for policy in list(FirewallPolicy.objects.all())]
     if firewall_policy is None:
         return policy
     else:
@@ -353,7 +328,7 @@ def obtain_fwpolicy(firewall_policy=None):
                                        '{}. Available policies: {}'
                                        .format(firewall_policy, policy))
             
-    return [policy.name for policy in describe_fw_policy()]
+    return [policy.name for policy in list(FirewallPolicy.objects.all())]
 
 def validate(firewall_policy, vpn=None, antivirus=None, 
              gti=None, dns=None, **kwargs):
