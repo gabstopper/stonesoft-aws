@@ -14,7 +14,7 @@ setup(name='stonesoft-aws',
       packages=find_packages(),
       include_package_data=True,
       install_requires=[
-	    'smc-python',
+	'smc-python',
         'boto3',
         'ipaddress',
         'pyyaml'
@@ -24,7 +24,7 @@ setup(name='stonesoft-aws',
                 'ngfw_launcher=deploy.__main__:main'
         ]
       },
-      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python'],
+      dependency_links=['https://github.com/gabstopper/smc-python/tarball/master#egg=smc-python-0'],
       classifiers=[
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3.4",
