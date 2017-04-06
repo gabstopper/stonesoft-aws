@@ -92,14 +92,8 @@ settings are available:
    
 ``aws_client_ami`` is only used when creating a new VPC. It is a convenience option to
 automatically spin up a new host machine behind Stonesoft NGFW for testing. If you want
-to automatically create a firewall rule to allow the inbound traffic, use ``inbound_nat``
-redirect_port and dest_port setting. For example, enabling inbound SSH on port 2222, and
-redirecting to the AMI client on port 22::
-
-	inbound_nat:
-		redirect_port: 22
-		dest_port: 2222
-		
+to automatically create a firewall rule to allow the inbound traffic, see the ``inbound_nat``
+setting in the ngfw configuration section below.		
    
 NGFW options
 ------------
@@ -119,8 +113,6 @@ disable on the deployed instance.
 | default_nat            | Enable NAT outbound (True)     | boolean  | No       |
 +------------------------+--------------------------------+----------+----------+
 | inbound_nat            | Inbound NAT dest and redirect  | int      | No       |
-| (redirect_port,        | -redirect port for inbound host|          |          |
-|  dest_port)            | -dest port on external intf    |          |          |
 +------------------------+--------------------------------+----------+----------+
 | firewall_policy        | Layer 3 Firewall Policy name   | str      | No       |
 +------------------------+--------------------------------+----------+----------+
@@ -131,22 +123,28 @@ disable on the deployed instance.
 |                        | GTI is enabled)                |          |          |
 +------------------------+--------------------------------+----------+----------+
 
+.. note::
+   ``firewall_policy`` is not a required field, however because a policy is required to
+   deploy the NGFW, a default policy named "Default_AWS" will be created allowing access 
+   from the private subnet outbound. If ``firewall_policy`` is  defined, an attempt will 
+   be made to validate the policy exists before running the automation.
+   
 If Antivirus or GTI is set to true, DNS settings will be required.
 
 .. note:: 
    If SMC is behind a NAT device, provide a ``nat_address`` with the public IP address
    where the SMC can be contacted. 
 
-Inbound_nat is used to specify the destination port to allow inbound connections on and
-the redirect port is used as the port to redirect to the internal client. For example,
+``Inbound_nat`` is used to specify the destination port to allow for inbound connections
+and the redirect port is used as the port to redirect to the internal client. For example,
 you might set 'dest_port' to 2222, and redirect_port to '22' if you wanted to allow
 inbound SSH on port 2222 and have it redirected to the internal client on port 22.
- 
-.. note::
-   ``firewall_policy`` is not a required field, however because a policy is required to
-   deploy the NGFW, a default policy named "Default_AWS" will be created allowing access 
-   from the private subnet outbound. If ``firewall_policy`` is  defined, an attempt will 
-   be made to validate the policy exists before running the automation.
+
+::
+
+	inbound_nat:
+	  redirect_port: 22
+	  dest_port: 2222
    
     
 If VPN is required, you can optionally add VPN specific settings into the NGFW configuration:
