@@ -62,15 +62,16 @@ class NGFWConfiguration(object):
             network_value = interface.get('network_value')
             if interface_id == 0:
                 mgmt_ip = address
-                engine = Layer3Firewall.create(self.name, 
-                                               mgmt_ip=address, 
-                                               mgmt_network=network_value,
-                                               domain_server_address=self.dns,
-                                               reverse_connection=self.reverse_connection, 
-                                               default_nat=self.default_nat,
-                                               enable_antivirus=self.antivirus,
-                                               enable_gti=self.gti,
-                                               location_ref=location)
+                engine = Layer3Firewall.create(
+                    self.name, 
+                    mgmt_ip=address, 
+                    mgmt_network=network_value,
+                    domain_server_address=self.dns,
+                    reverse_connection=self.reverse_connection, 
+                    default_nat=self.default_nat,
+                    enable_antivirus=self.antivirus,
+                    enable_gti=self.gti,
+                    location_ref=location)
                 engine.add_route(default_gateway, '0.0.0.0/0')
             else:
                 engine.physical_interface.add_single_node_interface(interface_id=interface_id, 
@@ -169,8 +170,8 @@ class NGFWConfiguration(object):
             
             service = list(TCPService.objects.filter(dest_port))  # @UndefinedVariable
             if not service:
-                service = TCPService.create(name='aws_tcp{}'.format(dest_port), 
-                                            min_dst_port=redirect_port)
+                service = [TCPService.create(name='aws_tcp{}'.format(dest_port), 
+                                            min_dst_port=redirect_port)]
 
             # Create the access rule for the client
             policy.fw_ipv4_access_rules.create(

@@ -330,15 +330,16 @@ class VpcConfiguration(object):
                                    'DeviceIndex': idx})
        
         #create run instance
-        instance = ec2.create_instances(ImageId=imageid,
-                                        MinCount=1,
-                                        MaxCount=1,
-                                        InstanceType=instance_type,
-                                        KeyName=key_pair,
-                                        Placement={'AvailabilityZone': 
-                                                   self.availability_zone},
-                                        NetworkInterfaces=interfaces,
-                                        UserData=userdata)
+        instance = ec2.create_instances(
+            ImageId=imageid,
+            MinCount=1,
+            MaxCount=1,
+            InstanceType=instance_type,
+            KeyName=key_pair,
+            Placement={'AvailabilityZone': 
+                       self.availability_zone},
+            NetworkInterfaces=interfaces,
+            UserData=userdata)
         return instance[0]
 
 def authorize_security_group_ingress(security_group, from_cidr_block, 
