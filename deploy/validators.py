@@ -215,11 +215,12 @@ def prompt_user(path=None):
         fw.pop('vpn', None)
     fw.update(dns=fw.get('dns').split(','))
     data.update({'NGFW': fw})
-
+    
     aws = {}
     creds = aws_creds()
     
     print(AWS_BANNER)
+    
     for opt in creds:
         aws.update(prompt(opt))
         if aws.get('aws_access_key_id'):

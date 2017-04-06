@@ -25,7 +25,7 @@ to automate the object creation. These credentials are used to enumerate and per
 ####Requirements:
 Stonsoft Management Center >= 6.2
 
-smc-python >=0.4.10
+smc-python >=0.4.12
 
 python 2.7.x, 3.4, 3.5
 
@@ -75,7 +75,7 @@ ngfw_launcher configure
 Examples of operations:
 ___
 
-Deploy Stonesoft NGFW into an existing VPC with verbose logging:
+Add a Stonesoft NGFW into an existing VPC with verbose logging (menu allows you to choose which subnet, or all):
 ```
 ngfw_launcher -y /path/to/config.yml --add --verbose
 ```

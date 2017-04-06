@@ -9,7 +9,8 @@ from smc.api.configloader import transform_login
 from smc.elements.helpers import location_helper
 from smc.vpn.policy import VPNPolicy
 from smc.core.engines import Layer3Firewall
-from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput
+from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput,\
+    DeleteElementFailed, CreatePolicyFailed
 from smc.administration.tasks import Task
 from smc.actions.search import element_by_href_as_json, element_name_by_href
 from smc.policy.layer3 import FirewallPolicy
@@ -18,6 +19,7 @@ from smc.elements.servers import ManagementServer, LogServer
 from smc.elements.resources import Search
 from smc.elements.service import TCPService
 from smc.elements.network import Alias
+from smc.policy.rule_elements import LogOptions, Action
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ class NGFWConfiguration(object):
         self.firewall_policy = firewall_policy
         self.reverse_connection = reverse_connection
         self.aws_ami_ip = None #IP used for client AMI rules
+        self.nat_ports = kwargs.pop('inbound_nat', None)
         # Unique temporary name
         uid = uuid.uuid4()
         self.name = uid.hex
@@ -127,26 +130,65 @@ class NGFWConfiguration(object):
         rules to allow inbound access to the AMI. This could be extended to 
         more generically support VPN rules.
         """
-        if self.aws_ami_ip:
-            service = list(TCPService.objects.filter('2222'))
-            if not service:
-                service = TCPService.create(name='ssh2222', min_dst_port=2222)
-                
-            policy = FirewallPolicy('Layer 3 Virtual*')
-            found=False
-            for rule in policy.fw_ipv4_nat_rules.all():
-                if rule.name == 'aws_client':
-                    rule.static_dst_nat.translated_value = self.aws_ami_ip
-                    rule.save()
-            if not found:
-                policy.fw_ipv4_nat_rules.create(name='aws_client', 
-                                                sources='any', 
-                                                destinations=[Alias('$$ Interface ID 0.ip')], 
-                                                services=service, 
-                                                static_dst_nat='1.1.1.1', 
-                                                static_dst_nat_ports=(2222, 22),
-                                                used_on=self.engine.href)
+        if not self.firewall_policy:
+            self.firewall_policy = 'AWS_Default'
+            # Policy not specified, use the default, or check if hidden setting was specified
+            try:
+                FirewallPolicy.create(name='AWS_Default', 
+                                      template='Firewall Inspection Template')  
+            except CreatePolicyFailed:
+                pass # Already exists
         
+        policy = FirewallPolicy(self.firewall_policy)
+        # Create the access rule for the network
+        
+        options = LogOptions()
+        options.log_accounting_info_mode = True 
+        options.log_level = 'stored' 
+        options.application_logging = 'enforced' 
+        options.user_logging = 'enforced'
+        
+        action = Action()
+        action.deep_inspection = True
+        action.file_filtering = False
+    
+        outbound_rule = policy.search_rule('AWS outbound access rule')
+        if not outbound_rule:
+            # Generic outbound access rule        
+            policy.fw_ipv4_access_rules.create(
+                name='AWS outbound access rule',
+                sources=[Alias('$$ Interface ID 1.net')],
+                destinations='any',
+                services='any',
+                action=action,
+                log_options=options)
+            
+        if self.aws_ami_ip and self.nat_ports:
+            dest_port = self.nat_ports.get('dest_port')
+            redirect_port = self.nat_ports.get('redirect_port')
+            
+            service = list(TCPService.objects.filter(dest_port))  # @UndefinedVariable
+            if not service:
+                service = TCPService.create(name='aws_tcp{}'.format(dest_port), 
+                                            min_dst_port=redirect_port)
+
+            # Create the access rule for the client
+            policy.fw_ipv4_access_rules.create(
+                name=self.name, 
+                sources='any', 
+                destinations=[Alias('$$ Interface ID 0.ip')], 
+                services=service, 
+                action='allow',
+                log_options=options)
+            policy.fw_ipv4_nat_rules.create(
+                name=self.name, 
+                sources='any', 
+                destinations=[Alias('$$ Interface ID 0.ip')], 
+                services=service, 
+                static_dst_nat=self.aws_ami_ip, 
+                static_dst_nat_ports=(dest_port, redirect_port),
+                used_on=self.engine.href)
+    
     def add_location(self, location_name):
         """
         Create a unique Location for the AWS Firewall if the NAT address is set.
@@ -157,10 +199,10 @@ class NGFWConfiguration(object):
         """
         if self.nat_address: #SMC behind NAT
             # Add to management server
-            mgt = list(ManagementServer.objects.filter('Management*'))
+            mgt = list(ManagementServer.objects.filter('Management*'))  # @UndefinedVariable
             for server in mgt:
                 server.add_contact_address(self.nat_address, location_name)
-            log = list(LogServer.objects.filter('Log*'))
+            log = list(LogServer.objects.filter('Log*'))  # @UndefinedVariable
             for server in log:
                 server.add_contact_address(self.nat_address, location_name)
             return location_helper(location_name)
@@ -256,10 +298,10 @@ def del_fw_from_smc(instance_ids):
                 # Remove Locations from mgmt / log server
                 location_ref = fw.attr_by_name('location_ref')
                 location_name = element_name_by_href(location_ref)
-                mgt = list(ManagementServer.objects.filter('Management*'))
+                mgt = list(ManagementServer.objects.filter('Management*'))  # @UndefinedVariable
                 for server in mgt:
                     server.remove_contact_address(location_name)
-                log = list(LogServer.objects.filter('Log*'))
+                log = list(LogServer.objects.filter('Log*'))  # @UndefinedVariable
                 for server in log:
                     server.remove_contact_address(location_name)
                 del_from_smc_vpn_policy(fw.name)
@@ -316,9 +358,11 @@ def obtain_fwpolicy(firewall_policy=None):
     """
     Return layer 3 firewall policies
     
+    :param firewall_policy: when called from command line menu, we
+        only need the list of options so firewall_policy will be none
     :return: list available layer 3 firewall policies
     """
-    policy = [policy.name for policy in list(FirewallPolicy.objects.all())]
+    policy = [policy.name for policy in list(FirewallPolicy.objects.all())]  # @UndefinedVariable
     if firewall_policy is None:
         return policy
     else:
@@ -327,15 +371,16 @@ def obtain_fwpolicy(firewall_policy=None):
                                        '{}. Available policies: {}'
                                        .format(firewall_policy, policy))
             
-    return [policy.name for policy in list(FirewallPolicy.objects.all())]
-
-def validate(firewall_policy, vpn=None, antivirus=None, 
+def validate(firewall_policy=None, vpn=None, antivirus=None, 
              gti=None, dns=None, **kwargs):
     """
     Validate that settings provided are valid objects in SMC before anything
-    is kicked off to AWS
+    is kicked off to AWS. If Firewall Policy is not provided, bypass the 
+    checks that it exists. When instance spins up, a new policy will be 
+    created called "Default_AWS". if the policy exists, it will be re-used.
     """
-    obtain_fwpolicy(firewall_policy)
+    if firewall_policy is not None:
+        obtain_fwpolicy(firewall_policy)
     if vpn is not None:
         try:
             vpn_policy = vpn['vpn_policy']

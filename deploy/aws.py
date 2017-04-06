@@ -156,8 +156,13 @@ class VpcConfiguration(object):
             self.public_subnet = subnet
             external = ipaddress.ip_network(u'{}'.format(cidr_block))
             external = str(list(external)[-2]) #broadcast address -1
+            
+            untrust_sg = create_security_group(self.vpc, 'stonesoft-untrust')
+            authorize_security_group_ingress(untrust_sg, '0.0.0.0/0', ip_protocol='-1')
+            
             interface = subnet.create_network_interface(PrivateIpAddress=external,
-                                                        Description=description)
+                                                        Description=description,
+                                                        Groups=[untrust_sg.id])
             # Wait to make sure it's available
             wait_for_resource(interface, self.vpc.network_interfaces.all())
             self.network_interface.append({interface_id: interface})
@@ -166,9 +171,14 @@ class VpcConfiguration(object):
             allocation_id = self.allocate_elastic_ip()
             address = ec2.VpcAddress(allocation_id)
             address.associate(NetworkInterfaceId=interface.network_interface_id)
-        else: 
-            # This attaches to private side networks
-            interface = subnet.create_network_interface(Description=description)
+            
+        else:
+            trust_sg = create_security_group(self.vpc, 'stonesoft-trust')
+            authorize_security_group_ingress(trust_sg, '0.0.0.0/0')
+                                             
+            # This attaches to private side networks, add security group
+            interface = subnet.create_network_interface(Description=description,
+                                                        Groups=[trust_sg.id])
             wait_for_resource(interface, self.vpc.network_interfaces.all())
             
             self.network_interface.append({interface_id: interface})
@@ -209,6 +219,7 @@ class VpcConfiguration(object):
         :param ec2.NetworkInterface interface: used for default route
         """
         alt_route_table = self.vpc.create_route_table()
+        wait_for_resource(alt_route_table, self.vpc.route_tables.all()) #Pause
         alt_route_table.create_tags(Tags=create_tag())
                 
         logger.info('Associating subnet ID: {} to alternate route table'
@@ -351,9 +362,10 @@ def authorize_security_group_ingress(security_group, from_cidr_block,
                 pass
             else: raise
 
-def create_security_group(vpc, name='stonesoft-sg', description='stonesoft ngfw'):
+def create_security_group(vpc, name='stonesoft-sg', 
+                          description='stonesoft ngfw security group'):
         """
-        Create security group specific for inbound traffic. Each VPC will have it's own
+        Create security group to control traffic rules. Each VPC will have it's own
         security group that will be applied only to the public network interface. 
         If existing VPC with multiple ngfw's are deployed, the same security group is 
         used.
@@ -409,17 +421,26 @@ def spin_up_host(key_pair, vpc, aws_client_ami,
     """
     logger.info('Spinning up client instance on private subnet: {}'
                 .format(vpc.private_subnet.id))
-    instance = ec2.create_instances(ImageId=aws_client_ami,
-                                    MinCount=1,
-                                    MaxCount=1,
-                                    SubnetId=vpc.private_subnet.id,
-                                    InstanceType=instance_type,
-                                    KeyName=key_pair,
-                                    Placement={'AvailabilityZone': 
-                                                vpc.availability_zone})
+    instance = ec2.create_instances(
+        ImageId=aws_client_ami,
+        MinCount=1,
+        MaxCount=1,
+        SubnetId=vpc.private_subnet.id,
+        InstanceType=instance_type,
+        KeyName=key_pair,
+        Placement={'AvailabilityZone': 
+                   vpc.availability_zone})
+    
     instance = instance[0]
     for data in instance.network_interfaces_attribute:
         ntwk = data.get('PrivateIpAddress')
+    
+    sg = list(vpc.vpc.security_groups.filter(
+            Filters=[{'Name': 'group-name',
+                      'Values': ['stonesoft-trust']}]))
+                                    
+    instance.modify_attribute(Groups=[sg[0].id])
+    
     logger.info('Client instance created: {} with keypair: {} at ipaddress: {}'
                 .format(instance.id, instance.key_name, ntwk))
     return ntwk
@@ -734,8 +755,9 @@ def rollback(vpc):
         logger.info("Terminating instance: {}".format(instance.instance_id))
         instance_ids.append(instance.instance_id)
         instance.terminate()
-    waiter = ec2.meta.client.get_waiter('instance_terminated')
-    waiter.wait(InstanceIds=instance_ids)
+    if instance_ids:
+        waiter = ec2.meta.client.get_waiter('instance_terminated')
+        waiter.wait(InstanceIds=instance_ids)
     # Network interfaces
     for intf in vpc.network_interfaces.all():
         intf.delete()
@@ -758,9 +780,10 @@ def rollback(vpc):
     try:
         grp = list(vpc.security_groups.filter(Filters=[{
                                                 'Name': 'group-name',
-                                                'Values': ['stonesoft-sg']}]))
-        if grp:
-            grp[0].delete()
+                                                'Values': ['stonesoft-untrust',
+                                                           'stonesoft-trust']}]))
+        for group in grp:
+            group.delete()
     except botocore.exceptions.ClientError as e:
         if e.response['Error']['Code'] == 'InvalidGroup.NotFound':
             pass

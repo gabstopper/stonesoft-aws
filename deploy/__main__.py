@@ -43,7 +43,7 @@ The tested scenario was based on public AWS documentation found at:
 http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Scenario2.html
 
 Requirements:
-* smc-python>=0.4.1
+* smc-python>=0.4.11
 * boto3
 * ipaddress
 * pyyaml
@@ -63,7 +63,6 @@ from deploy.aws import (
     list_all_subnets, list_tagged_instances, 
     select_unused_subnet, select_instance, 
     select_delete_vpc, get_ec2_client, 
-    authorize_security_group_ingress, create_security_group,
     rollback_existing_vpc, validate_aws, select_deploy_style, map_az_to_subnet,
     VpcConfigurationError, rollback)
 from deploy.ngfw import NGFWConfiguration, validate, get_smc_session,\
@@ -104,10 +103,8 @@ def create_vpc_and_ngfw(awscfg, ngfw):
     ngfw = NGFWConfiguration(**ngfw)
 
     try:
-        vpc.create_network_interface(0, awscfg.vpc_public, description='public-ngfw') 
-        vpc.create_network_interface(1, awscfg.vpc_private, description='private-ngfw')
-        vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
-        authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
+        vpc.create_network_interface(0, awscfg.vpc_public, description='stonesoft-public') 
+        vpc.create_network_interface(1, awscfg.vpc_private, description='stonesoft-private')
         
         # If user wants a client AMI, launch in the background
         if awscfg.aws_client_ami:
@@ -170,14 +167,12 @@ def create_inline_ngfw(subnets, public, awscfg, ngfw, queue):
         # Create public side network for interface 0 using the /28 network space
         vpc.create_network_interface(0, cidr_block=public, 
                                      availability_zone=subnets[0].availability_zone,
-                                     description='public ngfw')
-        vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
-        authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
+                                     description='stonesoft-public')
         
         # Each ec2 Subnet gets it's own network interface and route table
         intf = 1
         for subnet in subnets:
-            vpc.create_network_interface(intf, ec2_subnet=subnet, description='private ngfw')
+            vpc.create_network_interface(intf, ec2_subnet=subnet, description='stonesoft-private')
             intf += 1
     
         ngfw_init = deploy(vpc, ngfw, awscfg)
@@ -203,10 +198,7 @@ def create_as_nat_gateway(subnets, public, awscfg, ngfw, queue):
         # Create public side network for interface 0 using the /28 network space
         vpc.create_network_interface(0, cidr_block=public, 
                                      availability_zone=subnets[0].availability_zone,
-                                     description='public ngfw')
-        vpc.security_group = create_security_group(vpc.vpc, 'stonesoft-sg')
-        authorize_security_group_ingress(vpc.security_group, '0.0.0.0/0', ip_protocol='-1')
-        #TODO: Make inbound access control configurable?
+                                     description='stonesoft-public')
         
         # Change route tables of any subnets specified to use NAT Gateway
         interface = [intf.get(0) for intf in vpc.network_interface][0]
@@ -300,13 +292,6 @@ def deploy(vpc, ngfw, awscfg):
                 
     logger.info('To connect to your NGFW AWS instance, execute the command: '
                 'ssh -i {}.pem aws@{}'.format(instance.key_name, vpc.elastic_ip))
-    
-    # Add security group to network interface 
-    # (not supported on launch when network interfaces are specified)
-    for interfaces in vpc.network_interface:
-        for index, network in interfaces.items():
-            if index == 0:
-                network.modify_attribute(Groups=[vpc.security_group.id])
                            
     # Rename NGFW to AMI instance id (availability zone)
     ngfw.rename('{} ({})'.format(instance.id, vpc.availability_zone))
@@ -375,7 +360,7 @@ def main():
             smc = data.get('SMC')
         except yaml.YAMLError as exc:
             print(exc)
-
+    
     get_ec2_client(awscfg, prompt_for_region=True)
     get_smc_session(smc)
     
