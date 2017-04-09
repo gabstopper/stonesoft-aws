@@ -1,4 +1,4 @@
-[![Documentation Status](https://readthedocs.org/projects/stonesoft-aws/badge/?version=latest)](http://stonesoft-aws.readthedocs.io/en/latest/?badge=latest)
+[![Documentation Status](https://readthedocs.org/projects/stonesoft-aws/badge/?version=latest)](http://stonesoft-aws.readthedocs.io/en/latest/?badge=latest) [![GitHub version](https://badge.fury.io/gh/gabstopper%2Fstonesoft-aws.svg)](https://badge.fury.io/gh/gabstopper%2Fstonesoft-aws)
 
 ### Deploy Stonesoft NGFW into AWS
 
