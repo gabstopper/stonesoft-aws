@@ -214,10 +214,10 @@ Example configuration file:
 	  vpc_subnet: 192.168.4.0/24
 	NGFW:
 	  antivirus: true
-      default_nat: true
-      inbound_nat: 
-        dest_port: 2222
-        redirect_port: 22
+	  default_nat: true
+	  inbound_nat: 
+	    dest_port: 2222
+	    redirect_port: 22
 	  gti: false
 	  dns:
 	  - 8.8.8.8

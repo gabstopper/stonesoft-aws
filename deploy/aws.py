@@ -206,6 +206,7 @@ class VpcConfiguration(object):
                                    AvailabilityZone=az)
         logger.info('Created subnet: {}, in availablity zone: {}'
                     .format(subnet.subnet_id, subnet.availability_zone))
+        wait_for_resource(subnet, self.vpc.subnets.all())
         subnet.create_tags(Tags=create_tag())
         return subnet
     
@@ -886,10 +887,10 @@ def get_ec2_client(awscfg, prompt_for_region=False):
                                             aws_session.get_available_regions('ec2'))
         else:
             region = awscfg.aws_region
-        ec2 = boto3.resource('ec2',
-                             aws_access_key_id=awscfg.aws_access_key_id,
-                             aws_secret_access_key=awscfg.aws_secret_access_key,
-                             region_name=region)
+        ec2 = get_ec2_resource(awscfg.aws_access_key_id, 
+                               awscfg.aws_secret_access_key, 
+                               region)
+    
     else:
         # Resolve AWS credentials using normal boto3 methods
         s = boto3.session.Session()
@@ -900,11 +901,16 @@ def get_ec2_client(awscfg, prompt_for_region=False):
             region = custom_choice_menu('Enter a region:', 
                                         s.get_available_regions('ec2'))
         logger.debug('Connecting to region: {}'.format(region))
-        ec2 = boto3.resource('ec2',
-                             aws_access_key_id=access_key,
-                             aws_secret_access_key=secret_key,
-                             region_name=region)
+        ec2 = get_ec2_resource(access_key, secret_key, region)
         
     logger.debug('Obtained ec2 client: %s' % ec2)
     return ec2
-    
+
+def get_ec2_resource(access_key, secret_key, region):
+    return boto3.resource('ec2',
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region)
+
+def get_boto3_session():
+    return boto3.session.Session()

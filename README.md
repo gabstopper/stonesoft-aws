@@ -1,6 +1,6 @@
 [![Documentation Status](https://readthedocs.org/projects/stonesoft-aws/badge/?version=latest)](http://stonesoft-aws.readthedocs.io/en/latest/?badge=latest)
 
-###Deploy Stonesoft NGFW into AWS
+### Deploy Stonesoft NGFW into AWS
 
 Python based tool to auto-deploy Stonesoft NGFW into Amazon Web Services.
 
@@ -14,7 +14,7 @@ or all instances in a specific VPC.
 A simple prompting menu is provided to step you through the process and requires a valid AWS and an SMC API Client credential
 to automate the object creation. These credentials are used to enumerate and perform the admin operations on both AWS and SMC.
  
-####Features:
+#### Features:
 * Deploy Stonesoft NGFW in existing AWS VPC
 * Deploy Stonesoft NGFW and create new VPC
 * Site-to-Site VPN from AWS cloud to on-prem
@@ -22,14 +22,14 @@ to automate the object creation. These credentials are used to enumerate and per
 * Auto-rollback of VPC and NGFW in case of operational failures during processing
 * Automation for adding/removing devices flexibilty through either prompt menu or YAML expressions
 
-####Requirements:
+#### Requirements:
 Stonsoft Management Center >= 6.2
 
 smc-python >=0.4.12
 
 python 2.7.x, 3.4, 3.5
 
-####Installation:
+#### Installation:
 
 ```
 virtualenv venv
@@ -38,7 +38,7 @@ pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-depend
 ```
 
 
-####Quick Start:
+#### Quick Start:
 
 
 After installation, program can be run by:
@@ -57,12 +57,14 @@ positional arguments:
 optional arguments:
   -h, --help            show this help message and exit
   -y YAML, --yaml YAML  Specify yaml configuration file name
-  -d, --delete_vpc      Delete a VPC (menu)
-  -c, --create_vpc      Create a VPC with NGFW
+  --delete_vpc          Delete a VPC (menu)
+  --create_vpc          Create a VPC with NGFW
   -r, --remove          Remove NGFW from VPC (menu)
   -a, --add             Add NGFW to existing VPC (menu)
   -l, --list            List NGFW installed in VPC (menu)
+  -la, --listall        List all NGFW instances in AZs
   -v, --verbose         Enable verbose logging
+  --version             show program's version number and exit
 ```
 
 It is recommended to run 'configure' the first time through which will provide proper formatting for the 
@@ -86,10 +88,16 @@ Remove Stonesoft NGFW from an existing VPC:
 ngfw_launcher.py -y /path/to/config.yml --remove
 ```
 
-List all NGFW instances running in VPC:
+List all NGFW instances running in a specific VPC (using menu to select region):
 
 ```
 ngfw_launcher.py -y /path/to/config.yml --list
+```
+
+List all NGFW instances running across all available AZ's:
+
+```
+ngfw_launcher.py -y /path/to/config.yml --listall
 ```
 
 Delete a VPC created using this tool:
@@ -97,6 +105,10 @@ Delete a VPC created using this tool:
 ```
 ngfw_launcher.py -y /path/to/config.yml --delete_vpc
 ```
+
+__Note:__
+	VPC's not created with this tool cannot be removed. Each created VPC will have AWS tags specific to
+	the created objects.
 
 Create a new VPC with NGFW. Note, this requires vpc_subnet, vpc_private and vpc_public settings in
 the yaml configuration:

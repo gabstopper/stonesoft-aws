@@ -1,10 +1,10 @@
 AWS:
   aws_access_key_id: xxxxxxxxxxxxxxxxxxxxxxxx
   aws_secret_access_key: xxxxxxxxxxxxxxxxxxxxxxx
-  aws_client: false
+  aws_client_ami: ami-38cd975d
   aws_instance_type: t2.micro
   aws_keypair: fookeypair
-  aws_region: 
+  #aws_region: 
   ngfw_ami: ami-00000000
   vpc_private: 192.168.21.0/25
   vpc_public: 192.168.21.240/28
@@ -14,9 +14,12 @@ NGFW:
   default_nat: true
   dns:
   - 8.8.8.8
-  firewall_policy: Layer 3 Virtual FW Policy
+  #firewall_policy: Layer 3 Virtual FW Policy
   gti: true
   nat_address: 74.1.1.1
+  inbound_nat:
+    dest_port: 2222
+    redirect_port: 22
   vpn:
     vpn_networks: ''
     vpn_policy: Amazon AWS

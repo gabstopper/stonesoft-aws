@@ -43,7 +43,7 @@ The tested scenario was based on public AWS documentation found at:
 http://docs.aws.amazon.com/AmazonVPC/latest/UserGuide/VPC_Scenario2.html
 
 Requirements:
-* smc-python>=0.4.11
+* smc-python>=0.4.12
 * boto3
 * ipaddress
 * pyyaml
@@ -64,7 +64,7 @@ from deploy.aws import (
     select_unused_subnet, select_instance, 
     select_delete_vpc, get_ec2_client, 
     rollback_existing_vpc, validate_aws, select_deploy_style, map_az_to_subnet,
-    VpcConfigurationError, rollback)
+    VpcConfigurationError, rollback, get_ec2_resource, get_boto3_session)
 from deploy.ngfw import NGFWConfiguration, validate, get_smc_session,\
     del_fw_from_smc
 from deploy.validators import prompt_user
@@ -318,6 +318,7 @@ def main():
     actions.add_argument('-r', '--remove', action='store_true', help='Remove NGFW from VPC (menu)')
     actions.add_argument('-a', '--add', action='store_true', help='Add NGFW to existing VPC (menu)')
     actions.add_argument('-l', '--list', action='store_true', help='List NGFW installed in VPC (menu)')
+    actions.add_argument('-la', '--listall', action='store_true', help='List all NGFW instances in AZs')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose logging')
     parser.add_argument('--version', action='version',
                         version='%(prog)s {version}'.format(version=__version__))
@@ -361,6 +362,24 @@ def main():
         except yaml.YAMLError as exc:
             print(exc)
     
+    if args.listall:
+        aws_session = get_boto3_session()
+        template = '{0:22}|{1:20}|{2:12}|{3:12}|{4:12}'
+        vpc_template = '{0:15}|' 
+        print(vpc_template.format('VPC ID'), 
+              template.format('Instance ID', 'Availability Zone', 'Type', 'State', 'Launch Time'))
+        for region in aws_session.get_available_regions('ec2'):
+            ec2 = get_ec2_resource(
+                awscfg.aws_access_key_id,
+                awscfg.aws_secret_access_key,
+                region)
+            for vpc in ec2.vpcs.filter():
+                instances = installed_as_list_view(vpc)
+                if instances:
+                    for instance in instances:
+                        print(vpc_template.format(vpc.id), template.format(*instance))
+        return
+    
     get_ec2_client(awscfg, prompt_for_region=True)
     get_smc_session(smc)
     
@@ -373,7 +392,6 @@ def main():
             print('Nothing to remove.')
         return
     
-    #TODO: If remnants are left over, list does not show whats still tagged
     if args.list:
         instances = installed_as_list_view(select_vpc(as_instance=True))
         if instances:

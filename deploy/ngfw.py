@@ -74,9 +74,10 @@ class NGFWConfiguration(object):
                     location_ref=location)
                 engine.add_route(default_gateway, '0.0.0.0/0')
             else:
-                engine.physical_interface.add_single_node_interface(interface_id=interface_id, 
-                                                                    address=address, 
-                                                                    network_value=network_value)
+                engine.physical_interface.add_single_node_interface(
+                    interface_id=interface_id, 
+                    address=address, 
+                    network_value=network_value)
    
         logger.info('Created NGFW successfully')
         self.engine = engine
@@ -168,11 +169,16 @@ class NGFWConfiguration(object):
             dest_port = self.nat_ports.get('dest_port')
             redirect_port = self.nat_ports.get('redirect_port')
             
-            service = list(TCPService.objects.filter(dest_port))  # @UndefinedVariable
+            services = list(TCPService.objects.filter(dest_port))  # @UndefinedVariable
+            # Ignore services with protocol agents so we skip SSM
+            service = next(([service] 
+                            for service in services 
+                            if not service.protocol_agent), [])
+            
             if not service:
                 service = [TCPService.create(name='aws_tcp{}'.format(dest_port), 
-                                            min_dst_port=redirect_port)]
-
+                                             min_dst_port=dest_port)]
+            
             # Create the access rule for the client
             policy.fw_ipv4_access_rules.create(
                 name=self.name, 
