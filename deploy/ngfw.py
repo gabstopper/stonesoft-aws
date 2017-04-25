@@ -16,7 +16,7 @@ from smc.actions.search import element_by_href_as_json, element_name_by_href
 from smc.policy.layer3 import FirewallPolicy
 from smc.core.contact_address import ContactAddress
 from smc.elements.servers import ManagementServer, LogServer
-from smc.elements.resources import Search
+from smc.base.collection import Search
 from smc.elements.service import TCPService
 from smc.elements.network import Alias
 from smc.policy.rule_elements import LogOptions, Action
