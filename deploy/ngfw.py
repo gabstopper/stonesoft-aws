@@ -11,8 +11,7 @@ from smc.vpn.policy import VPNPolicy
 from smc.core.engines import Layer3Firewall
 from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput,\
     DeleteElementFailed, CreatePolicyFailed
-from smc.administration.tasks import Task
-from smc.actions.search import element_by_href_as_json, element_name_by_href
+from smc.actions.search import element_name_by_href
 from smc.policy.layer3 import FirewallPolicy
 from smc.core.contact_address import ContactAddress
 from smc.elements.servers import ManagementServer, LogServer
@@ -119,10 +118,10 @@ class NGFWConfiguration(object):
         has succeeded so it's not queued. Monitor the upload process from 
         the SMC Administration->Tasks menu
         
-        :return: `smc.actions.tasks.Task` follower link
+        :return: ProgressTask
         """
         try:
-            return next(self.engine.upload('{}'.format(self.firewall_policy)))
+            return self.engine.upload('{}'.format(self.firewall_policy))
         except TaskRunFailed as e:
             logger.error(e)
     
@@ -206,12 +205,10 @@ class NGFWConfiguration(object):
         """
         if self.nat_address: #SMC behind NAT
             # Add to management server
-            mgt = list(ManagementServer.objects.filter('Management*'))  # @UndefinedVariable
-            for server in mgt:
-                server.add_contact_address(self.nat_address, location_name)
-            log = list(LogServer.objects.filter('Log*'))  # @UndefinedVariable
-            for server in log:
-                server.add_contact_address(self.nat_address, location_name)
+            mgt = ManagementServer.objects.first()
+            mgt.add_contact_address(self.nat_address, location_name)
+            log = LogServer.objects.first()
+            log.add_contact_address(self.nat_address, location_name)
             return location_helper(location_name)
     
     def add_contact_address(self, elastic_ip):
@@ -270,26 +267,7 @@ class NGFWConfiguration(object):
                 yield self
             yield None
 
-    def policy_waiter(self, follower):
-        """
-        Wait for policy upload
-        """
-        logger.info('Uploading policy for {}..'.format(self.engine.name))
-        start_time = time.time()
-        while True:
-            reply = Task(**element_by_href_as_json(follower))
-            if reply.progress:
-                logger.info('[{}]: policy progress -> {}%'.format(self.engine.name, 
-                                                                  reply.progress))
-            if not reply.in_progress:
-                logger.info('Upload policy task completed for {} in {} seconds'
-                            .format(self.engine.name, time.time() - start_time))
-                if not reply.success:
-                    yield [reply.last_message]
-                else:
-                    yield []
-            yield None
-                       
+
 def del_fw_from_smc(instance_ids):
     """
     FW name is 'instance_id (availability zone). To do proper cleanup,
@@ -298,13 +276,12 @@ def del_fw_from_smc(instance_ids):
     :param list instance_ids: string of instance ids
     :return: None
     """
-    firewalls = list(Search('single_fw').objects.all())
+    firewalls = list(Layer3Firewall.objects.all())
     for instance in instance_ids:
         for fw in firewalls:
             if fw.name.startswith(instance):
                 # Remove Locations from mgmt / log server
-                location_ref = fw.attr_by_name('location_ref')
-                location_name = element_name_by_href(location_ref)
+                location_name = element_name_by_href(fw.location_ref)
                 mgt = list(ManagementServer.objects.filter('Management*'))  # @UndefinedVariable
                 for server in mgt:
                     server.remove_contact_address(location_name)
@@ -326,11 +303,12 @@ def del_fw_from_smc(instance_ids):
                 else:
                     logger.info("Successfully removed NGFW.")
 
+
 def del_from_smc_vpn_policy(name):
     # Temporary solution - SMC API (6.1.1) does not expose the associated
     # VPN policies on the engine so we need to iterate each VPN policy and
     # look for our engine
-    for policyvpn in list(Search('vpn').objects.all()):
+    for policyvpn in list(VPNPolicy.objects.all()):
         policyvpn.open()
         for gw in policyvpn.central_gateway_node.all():
             if gw.name.startswith(name):
@@ -352,14 +330,14 @@ def obtain_vpnpolicy(vpn_policy=None):
     
     :return: list available VPN Policies
     """
-    policy = [vpn.name for vpn in list(Search('vpn').objects.all())]
+    policy = [vpn.name for vpn in list(VPNPolicy.objects.all())]
     if vpn_policy is None:
         return policy
     else:
         if not vpn_policy in policy:
-            raise MissingRequiredInput('VPN policy not found, name provided: '
-                                        '{}. Available policies: {}'
-                                        .format(vpn_policy, policy))
+            raise MissingRequiredInput(
+                'VPN policy not found, name provided: {}. Available policies: {}'
+                .format(vpn_policy, policy))
 
 def obtain_fwpolicy(firewall_policy=None):
     """
@@ -374,9 +352,9 @@ def obtain_fwpolicy(firewall_policy=None):
         return policy
     else:
         if not firewall_policy in policy:
-            raise MissingRequiredInput('Firewall policy not found, name provided: '
-                                       '{}. Available policies: {}'
-                                       .format(firewall_policy, policy))
+            raise MissingRequiredInput(
+                'Firewall policy not found, name provided: {}. Available policies: {}'
+                .format(firewall_policy, policy))
             
 def validate(firewall_policy=None, vpn=None, antivirus=None, 
              gti=None, dns=None, **kwargs):

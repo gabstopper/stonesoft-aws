@@ -224,25 +224,27 @@ def task_runner(ngfw, queue=None, sleep=5, duration=48):
     """
     # Wait max of 4 minutes for initial contact 
     waiter = ngfw.get_waiter()
-    follower = None
+    policy_task = None # ProgressTask
     for _ in range(duration):
         ready = next(waiter)
         if ready:
             ngfw.bind_license()
-            follower = ready.upload_policy()
+            policy_task = ready.upload_policy()
             break
         time.sleep(sleep)
     
     # Follower link can be none if upload policy times out 
     result = []
-    if follower:
-        waiter = ngfw.policy_waiter(follower)
-        for _ in range(duration):
-            status = next(waiter)
-            if status is not None:
-                result = status
-                break
-            time.sleep(sleep)
+    if policy_task:
+        logger.info('Uploading policy for {}..'.format(ngfw.name))
+        start_time = time.time()
+        for status in policy_task.wait(timeout=sleep, max_intervals=duration):
+            logger.info('[{}]: policy progress -> {}%'.format(
+                ngfw.name, status))
+        logger.info('Upload policy task completed for {} in {} seconds'.format(
+            ngfw.name, time.time() - start_time))
+        if not policy_task.success:
+            result = [policy_task.last_message]
     else:
         result = ['Timed out waiting for initial contact, manual intervention required']
     if queue:
@@ -258,8 +260,8 @@ def generate_report(results):
         if not errors:
             logger.info('Finished running stonesoft deploy for: {}'.format(name))
         else:
-            logger.error('Exception occurred deploying: {}, reason: {}'
-                         .format(name, errors[0]))
+            logger.error('Exception occurred deploying: {}, reason: {}'.format(
+                name, errors[0]))
         
 def deploy(vpc, ngfw, awscfg):
     """
