@@ -69,6 +69,7 @@ from deploy.ngfw import NGFWConfiguration, validate, get_smc_session,\
     del_fw_from_smc
 from deploy.validators import prompt_user
 from smc.api.exceptions import CreateEngineFailed, NodeCommandFailed
+from smc.core.waiters import ConfigurationStatusWaiter
 try:
     from queue import Queue
 except ImportError:
@@ -222,35 +223,39 @@ def task_runner(ngfw, queue=None, sleep=5, duration=48):
     often polling occurs and for how long. Then execute
     upload policy and return overall results to queue
     """
-    # Wait max of 4 minutes for initial contact 
-    waiter = ngfw.get_waiter()
-    policy_task = None # ProgressTask
-    for _ in range(duration):
-        ready = next(waiter)
-        if ready:
-            ngfw.bind_license()
-            policy_task = ready.upload_policy()
-            break
-        time.sleep(sleep)
-    
-    # Follower link can be none if upload policy times out 
+    # Wait max of 4 minutes for initial contact
+    waiter = ConfigurationStatusWaiter(ngfw.engine.nodes[0], 'Configured')
+    logger.info('Waiting for NGFW: %s initial contact. ', ngfw.engine.name)
+    while not waiter.done():
+        waiter.wait(sleep)
+
     result = []
-    if policy_task:
-        logger.info('Uploading policy for {}..'.format(ngfw.name))
-        start_time = time.time()
-        for status in policy_task.wait(timeout=sleep, max_intervals=duration):
-            logger.info('[{}]: policy progress -> {}%'.format(
-                ngfw.name, status))
-        logger.info('Upload policy task completed for {} in {} seconds'.format(
-            ngfw.name, time.time() - start_time))
-        if not policy_task.success:
-            result = [policy_task.last_message]
+    if waiter.result() == 'Configured':
+        ngfw.bind_license()
+        # Start policy upload
+        policy_task = ngfw.upload_policy(
+            timeout=sleep,
+            duration=duration)
+        
+        if policy_task:
+            while not policy_task.done():
+                status = policy_task.result(sleep)
+                logger.info('[{}]: policy progress -> {}%'.format(
+                    ngfw.name, status.progress))
+    
+            if not policy_task.task.success:
+                result = [policy_task.last_message]
+            else:
+                logger.info('Upload policy task completed for {} in {} seconds'.format(
+                    ngfw.name, (policy_task.task.end_time - policy_task.task.start_time).total_seconds()))
     else:
         result = ['Timed out waiting for initial contact, manual intervention required']
+    
     if queue:
         queue.put((ngfw.engine.name, result))
     return [(ngfw.engine.name, result)]
-        
+  
+           
 def generate_report(results):
     """
     Generate report if errors

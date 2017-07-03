@@ -13,9 +13,7 @@ from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput
     DeleteElementFailed, CreatePolicyFailed
 from smc.actions.search import element_name_by_href
 from smc.policy.layer3 import FirewallPolicy
-from smc.core.contact_address import ContactAddress
 from smc.elements.servers import ManagementServer, LogServer
-from smc.base.collection import Search
 from smc.elements.service import TCPService
 from smc.elements.network import Alias
 from smc.policy.rule_elements import LogOptions, Action
@@ -112,7 +110,7 @@ class NGFWConfiguration(object):
         self.name = name
         self.engine.rename(name)
         
-    def upload_policy(self):
+    def upload_policy(self, timeout=5, duration=48):
         """
         Upload policy to engine. This is executed after initial contact
         has succeeded so it's not queued. Monitor the upload process from 
@@ -121,7 +119,9 @@ class NGFWConfiguration(object):
         :return: ProgressTask
         """
         try:
-            return self.engine.upload('{}'.format(self.firewall_policy))
+            return self.engine.upload('{}'.format(self.firewall_policy),
+                                      timeout=timeout, wait_for_finish=True,
+                                      max_tries=duration)
         except TaskRunFailed as e:
             logger.error(e)
     
@@ -221,8 +221,7 @@ class NGFWConfiguration(object):
         """
         contact_addresses = self.engine.contact_addresses(0)
         for interface in contact_addresses: #ContactInterface
-            contact_addr = ContactAddress.create(elastic_ip) #Default
-            interface.add_contact_address(contact_addr)
+            interface.add_contact_address(elastic_ip)
 
     def initial_contact(self):
         """
@@ -250,22 +249,6 @@ class NGFWConfiguration(object):
             node.bind_license()
         except(LicenseError) as e:
             logger.error(e)
-    
-    def get_waiter(self, status='Configured'):
-        """
-        Wait for initial contact
-        """
-        logger.info('Waiting for initial contact from: {}'.format(self.engine.name))
-        start_time = time.time()
-        node = self.engine.nodes[0]
-        while True:
-            state = node.status()
-            logger.debug('Node: {} status {}'.format(node.name, state.configuration_status))
-            if status == state.configuration_status:
-                logger.info("Initial contact: '%s' took: %s seconds" % \
-                            (node.name, time.time() - start_time))
-                yield self
-            yield None
 
 
 def del_fw_from_smc(instance_ids):

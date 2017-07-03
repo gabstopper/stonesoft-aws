@@ -5,7 +5,7 @@ def readme():
         return f.read()
 
 setup(name='stonesoft-aws',
-      version='0.2.15',
+      version='0.2.16',
       description='Stonesoft NGFW deployer for AWS',
       url='http://github.com/gabstopper/stonesoft-aws',
       author='David LePage',
