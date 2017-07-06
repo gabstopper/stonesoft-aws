@@ -1,4 +1,4 @@
--e git+https://github.com/gabstopper/smc-python#egg=smc-python
+smc-python>=0.5.5
 ipaddress==1.0.17
 boto3==1.4.1
 PyYAML==3.12

@@ -2,7 +2,6 @@
 NGFW Settings and required methods
 '''
 import uuid
-import time
 import logging      
 from smc import session
 from smc.api.configloader import transform_login

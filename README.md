@@ -25,7 +25,7 @@ to automate the object creation. These credentials are used to enumerate and per
 #### Requirements:
 Stonsoft Management Center >= 6.2
 
-smc-python >=0.4.12
+smc-python >=0.5.5
 
 python 2.7.x, 3.4, 3.5
 
@@ -34,7 +34,7 @@ python 2.7.x, 3.4, 3.5
 ```
 virtualenv venv
 . venv/bin/activate
-pip install git+https://github.com/gabstopper/stonesoft-aws.git --process-dependency-links
+pip install git+https://github.com/gabstopper/stonesoft-aws.git
 ```
 
 
