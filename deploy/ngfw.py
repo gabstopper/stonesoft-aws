@@ -6,7 +6,7 @@ import logging
 from smc import session
 from smc.api.configloader import transform_login
 from smc.elements.helpers import location_helper
-from smc.vpn.policy import VPNPolicy
+from smc.vpn.policy import PolicyVPN
 from smc.core.engines import Layer3Firewall
 from smc.api.exceptions import TaskRunFailed, LicenseError, MissingRequiredInput,\
     DeleteElementFailed, CreatePolicyFailed
